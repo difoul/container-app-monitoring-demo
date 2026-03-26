@@ -1,0 +1,11 @@
+resource_group_name = "rg-monitoring-demo"
+location            = "swedencentral"
+acr_name            = "acrmonitoringdemo"   # must be globally unique, alphanumeric only
+container_app_name  = "monitoring-demo"
+alert_email         = "your-email@example.com"
+
+# Step 1 — leave as default for the first apply (placeholder image, no ACR push needed)
+# container_image = "mcr.microsoft.com/k8se/quickstart:latest"
+
+# Step 2 — after building and pushing to ACR, set this and run terraform apply again
+# container_image = "acrmonitoringdemo.azurecr.io/monitoring-demo:latest"
