@@ -193,7 +193,122 @@ ContainerAppSystemLogs_CL
 
 ---
 
-## 2. Alerting
+## 2. Dashboard
+
+The Azure Monitor Workbook provides a single-pane view of all key infrastructure and application metrics without writing any queries. Open it at **Azure Monitor → Workbooks → "\<prefix\> Monitoring"**.
+
+---
+
+### How to open the dashboard
+
+1. Go to **Azure Portal → Monitor → Workbooks**
+2. Select the workbook named **"\<prefix\> Monitoring"**
+3. Use the parameter bar at the top to select your **Subscription**, **Container App**, **Application Insights** resource, and **Time Range**
+4. All charts update automatically based on your selections
+
+---
+
+### What the dashboard shows
+
+| Section | Chart | Metric | Aggregation |
+| --- | --- | --- | --- |
+| Infrastructure | CPU Usage | `UsageNanoCores` | Maximum |
+| Infrastructure | Memory Usage | `WorkingSetBytes` | Average |
+| Infrastructure | Replica Count | `Replicas` | Average |
+| Infrastructure | Container Restarts | `RestartCount` | Total |
+| Application | HTTP Failed Requests | `requests/failed` | Count |
+| Application | Availability | `availabilityResults/availabilityPercentage` | Average |
+
+---
+
+### How to provision the dashboard with Terraform
+
+```hcl
+resource "azurerm_application_insights_workbook" "main" {
+  name                = "<valid-uuid>"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  display_name        = "<prefix> Monitoring"
+  source_id           = "azure monitor"
+
+  data_json = jsonencode({
+    version = "Notebook/1.0"
+    items = [
+      {
+        type = 9
+        content = {
+          version                 = "KqlParameterItem/1.0"
+          crossComponentResources = ["{Subscription}"]
+          parameters = [
+            {
+              id         = "p0-subscription"
+              version    = "KqlParameterItem/1.0"
+              name       = "Subscription"
+              label      = "Subscription"
+              type       = 6
+              isRequired = true
+              typeSettings = {
+                additionalSubscriptionIds = []
+                includeAll               = false
+              }
+            },
+            {
+              id                      = "p1-container-app"
+              version                 = "KqlParameterItem/1.0"
+              name                    = "ContainerApp"
+              label                   = "Container App"
+              type                    = 5
+              isRequired              = true
+              multiSelect             = false
+              query                   = "where type == 'microsoft.app/containerapps'\n| project id, name"
+              crossComponentResources = ["{Subscription}"]
+              queryType               = 1
+              resourceType            = "microsoft.resourcegraph/resources"
+              typeSettings = {
+                additionalResourceOptions = []
+                showDefault               = false
+              }
+            },
+            {
+              id                      = "p2-app-insights"
+              version                 = "KqlParameterItem/1.0"
+              name                    = "AppInsights"
+              label                   = "Application Insights"
+              type                    = 5
+              isRequired              = true
+              multiSelect             = false
+              query                   = "where type == 'microsoft.insights/components'\n| project id, name"
+              crossComponentResources = ["{Subscription}"]
+              queryType               = 1
+              resourceType            = "microsoft.resourcegraph/resources"
+              typeSettings = {
+                additionalResourceOptions = []
+                showDefault               = false
+              }
+            },
+            {
+              id      = "p3-time-range"
+              version = "KqlParameterItem/1.0"
+              name    = "TimeRange"
+              label   = "Time Range"
+              type    = 4
+              value   = { durationMs = 3600000 }
+            }
+          ]
+        }
+        name = "parameters"
+      }
+    ]
+    "$schema" = "https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json"
+  })
+}
+```
+
+> **Resource picker gotchas:** Each resource picker parameter (type 5) requires `queryType = 1`, `resourceType = "microsoft.resourcegraph/resources"`, and `crossComponentResources` set at the **parameter level**. The query must start with `where type == '...'` directly — do not prefix with `resources |`. Using `typeSettings.resourceTypeFilter` alone does not populate the dropdown.
+
+---
+
+## 3. Alerting
 
 ### What alerts to configure
 
@@ -436,11 +551,11 @@ When an alert fires, follow the first steps below to triage quickly.
 | **Container restarts** | Log Analytics → query `ContainerAppSystemLogs_CL` for OOM or crash reason |
 | **CPU high** | Check for runaway threads or unexpected load; review App Insights Live Metrics for request rate |
 | **Memory high** | Check for memory leaks; verify no load test is running; review `WorkingSetBytes` trend |
-| **App/Env deleted** | Follow the recovery runbook — see section 4 |
+| **App/Env deleted** | Follow the recovery runbook — see section 5 |
 
 ---
 
-## 3. High Availability
+## 4. High Availability
 
 ### How to configure HA
 
@@ -621,7 +736,7 @@ Regardless of the scaling rule type, scale-in behavior is the same:
 
 ---
 
-## 4. Backup and Recovery
+## 5. Backup and Recovery
 
 ### What the backup strategy is
 
@@ -703,7 +818,7 @@ After rolling back, update the image tag in your Terraform variables file so the
 
 ---
 
-## 5. Permissions
+## 6. Permissions
 
 ### Who needs what access
 
@@ -751,7 +866,7 @@ az role assignment list \
 
 ---
 
-## 6. Quick Reference Commands
+## 7. Quick Reference Commands
 
 ```bash
 # Get the app's public URL (FQDN)
