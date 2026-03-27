@@ -17,6 +17,100 @@ This guide covers how to monitor, alert, scale, and recover an Azure Container A
 
 ---
 
+## Before You Start
+
+Before any monitoring, alerting, or log querying works, you must provision the required resources and wire up the Container App to send telemetry to them.
+
+### Required resources
+
+| Resource | Purpose | Terraform type |
+| --- | --- | --- |
+| Log Analytics Workspace | Receives container stdout/stderr and system logs; query target for KQL | `azurerm_log_analytics_workspace` |
+| Application Insights | Collects application-level telemetry (requests, exceptions, traces, dependencies) | `azurerm_application_insights` |
+
+> **Important:** Application Insights must be **workspace-based** — link it to the Log Analytics Workspace at creation time via the `workspace_id` property. Classic (non-workspace) Application Insights is deprecated and cannot be linked.
+
+```hcl
+resource "azurerm_log_analytics_workspace" "main" {
+  name                = "law-<prefix>"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  sku                 = "PerGB2018"
+  retention_in_days   = 30
+}
+
+resource "azurerm_application_insights" "main" {
+  name                = "appi-<prefix>"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = azurerm_resource_group.main.location
+  workspace_id        = azurerm_log_analytics_workspace.main.id
+  application_type    = "web"
+}
+```
+
+---
+
+### Required service configuration
+
+#### Container Apps Environment — link to Log Analytics
+
+The Container Apps Environment must be linked to the Log Analytics Workspace. This enables container stdout/stderr and system event logs to flow to the workspace automatically.
+
+```hcl
+resource "azurerm_container_app_environment" "main" {
+  name                       = "cae-<prefix>"
+  resource_group_name        = azurerm_resource_group.main.name
+  location                   = azurerm_resource_group.main.location
+  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+}
+```
+
+> **Note:** This linkage is set at environment creation and cannot be changed afterwards. If you skip it, container logs will not appear in Log Analytics and KQL queries against `ContainerAppSystemLogs_CL` will return no results.
+
+#### Container App — Application Insights connection string
+
+To get application-level telemetry (requests, exceptions, traces), your container must be instrumented with the Azure Monitor OpenTelemetry SDK **and** receive the Application Insights connection string as an environment variable.
+
+Pass it via a secret and reference it as an environment variable in the container definition:
+
+```hcl
+resource "azurerm_container_app" "main" {
+  # ...
+  secret {
+    name  = "appinsights-connection-string"
+    value = azurerm_application_insights.main.connection_string
+  }
+
+  template {
+    container {
+      # ...
+      env {
+        name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
+        secret_name = "appinsights-connection-string"
+      }
+    }
+  }
+}
+```
+
+Your application code must then initialise the SDK on startup:
+
+```python
+# Python (azure-monitor-opentelemetry)
+from azure.monitor.opentelemetry import configure_azure_monitor
+configure_azure_monitor()  # reads APPLICATIONINSIGHTS_CONNECTION_STRING from env
+```
+
+```javascript
+// Node.js (@azure/monitor-opentelemetry)
+const { useAzureMonitor } = require("@azure/monitor-opentelemetry");
+useAzureMonitor(); // reads APPLICATIONINSIGHTS_CONNECTION_STRING from env
+```
+
+> **Note:** Without this configuration, `requests/failed`, `availabilityResults/availabilityPercentage`, and all App Insights-based alerts will have no data.
+
+---
+
 ## 1. Monitoring
 
 ### Which metrics to watch
