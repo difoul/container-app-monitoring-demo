@@ -7,7 +7,7 @@ resource "azurerm_container_app_environment" "main" {
   zone_redundancy_enabled    = true
 
   lifecycle {
-    prevent_destroy = true
+    #prevent_destroy = true
     ignore_changes = [
       infrastructure_subnet_id,
       # Azure auto-creates a managed resource group (ME_...) — normalizes after first apply
