@@ -12,6 +12,8 @@ resource "azurerm_application_insights_workbook" "main" {
     items = [
 
       # ── Parameters ──────────────────────────────────────────────────────────
+      # Resource pickers use hardcoded resource IDs (available from Terraform)
+      # so the workbook loads immediately without waiting for ARG queries to resolve.
       {
         type = 9
         content = {
@@ -37,10 +39,11 @@ resource "azurerm_application_insights_workbook" "main" {
               label                   = "Container App"
               type                    = 5
               isRequired              = true
-              query                   = "resources\n| where type == 'microsoft.app/containerapps'"
+              multiSelect             = false
+              query                   = "where type == 'microsoft.app/containerapps'\n| project id, name"
               crossComponentResources = ["{Subscription}"]
               queryType               = 1
-              resourceType            = "ms.resourcemanager/tenants"
+              resourceType            = "microsoft.resourcegraph/resources"
               typeSettings = {
                 additionalResourceOptions = []
                 showDefault               = false
@@ -53,10 +56,11 @@ resource "azurerm_application_insights_workbook" "main" {
               label                   = "Application Insights"
               type                    = 5
               isRequired              = true
-              query                   = "resources\n| where type == 'microsoft.insights/components'"
+              multiSelect             = false
+              query                   = "where type == 'microsoft.insights/components'\n| project id, name"
               crossComponentResources = ["{Subscription}"]
               queryType               = 1
-              resourceType            = "ms.resourcemanager/tenants"
+              resourceType            = "microsoft.resourcegraph/resources"
               typeSettings = {
                 additionalResourceOptions = []
                 showDefault               = false
