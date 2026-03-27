@@ -7,7 +7,7 @@ This guide covers how to monitor, alert, scale, and recover an Azure Container A
 ## Stack Overview
 
 | Component | Service |
-|---|---|
+| --- | --- |
 | Application runtime | Azure Container Apps |
 | Metrics & logs | Azure Monitor + Log Analytics Workspace |
 | Application telemetry | Application Insights (OpenTelemetry) |
@@ -24,7 +24,7 @@ This guide covers how to monitor, alert, scale, and recover an Azure Container A
 Azure Container Apps expose infrastructure metrics. Application Insights collects application-level telemetry. Use both layers together for full observability.
 
 | Metric | Namespace | What it measures | Recommended aggregation |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | `UsageNanoCores` | `Microsoft.App/containerApps` | CPU consumption per replica | **Maximum** — Average masks bursts |
 | `WorkingSetBytes` | `Microsoft.App/containerApps` | Physical memory in use | **Average** |
 | `Replicas` | `Microsoft.App/containerApps` | Number of running replicas | Average |
@@ -33,9 +33,7 @@ Azure Container Apps expose infrastructure metrics. Application Insights collect
 | `availabilityResults/availabilityPercentage` | `microsoft.insights/components` | % of availability test probes passing | Average |
 
 > **Note for event-driven apps:** `requests/failed` and `availabilityResults/availabilityPercentage` are only meaningful for HTTP-facing apps. For event-driven consumers, focus on `RestartCount`, `WorkingSetBytes`, and `UsageNanoCores` from the Container App, and add service-specific metrics from your broker (e.g., Service Bus dead-letter count, Event Hubs consumer lag) via separate alerts.
-
 > **Note on `WorkingSetBytes`:** This metric only reflects memory that has been written to (committed working set). Allocated but unwritten memory does not appear — this is expected behavior.
-
 > **Note on CPU units:** `UsageNanoCores` is expressed in nanocores. 1 vCPU = 1,000,000,000 nanocores. Set your alert threshold accordingly (e.g., 80% of 0.5 vCPU = 400,000,000 nanocores).
 
 ---
@@ -43,7 +41,7 @@ Azure Container Apps expose infrastructure metrics. Application Insights collect
 ### Where to look in the portal
 
 | What you want to see | Where to find it |
-|---|---|
+| --- | --- |
 | Live request rate and active failures | App Insights → **Live Metrics** |
 | Failed requests with stack traces | App Insights → **Failures** |
 | Individual request traces | App Insights → **Transaction search** |
@@ -106,7 +104,7 @@ ContainerAppSystemLogs_CL
 Set up the following alerts to cover the most common failure modes. Thresholds in the table below are examples — adjust them based on your container's allocated CPU and memory.
 
 | Alert | Source | Metric | Example condition | Severity |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | Availability down | App Insights | `availabilityResults/availabilityPercentage` Average | < 100% | 0 — Critical |
 | HTTP 5xx spike | App Insights | `requests/failed` Count | > 10 in 5 min | 1 — Error |
 | Container restarting | Container App | `RestartCount` Total | > 0 | 1 — Error |
@@ -124,7 +122,7 @@ Set up the following alerts to cover the most common failure modes. Thresholds i
 All metric alerts should share the same evaluation settings for consistent behavior:
 
 | Setting | Recommended value |
-|---|---|
+| --- | --- |
 | Evaluation frequency | Every 1 minute |
 | Aggregation window | 5 minutes |
 | Notification channel | Email via action group |
@@ -336,7 +334,7 @@ resource "azurerm_monitor_activity_log_alert" "env_deleted" {
 When an alert fires, follow the first steps below to triage quickly.
 
 | Alert | First steps |
-|---|---|
+| --- | --- |
 | **Availability** | `curl https://<app_fqdn>/health` — if no response, check Log stream; if the app is gone, follow the recovery runbook |
 | **HTTP 5xx** | App Insights → **Failures** → inspect stack traces and request details |
 | **Container restarts** | Log Analytics → query `ContainerAppSystemLogs_CL` for OOM or crash reason |
@@ -353,7 +351,7 @@ When an alert fires, follow the first steps below to triage quickly.
 The following settings give you zone-redundant, fault-tolerant deployment with autoscaling.
 
 | Setting | Recommended value | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | Zone redundancy | Enabled | Replicas distributed across availability zones |
 | VNet integration | Dedicated /23 subnet | Required for zone redundancy; network isolation |
 | Min replicas | 2 | Survives a single zone failure without downtime |
@@ -369,7 +367,7 @@ The following settings give you zone-redundant, fault-tolerant deployment with a
 Azure Container Apps supports several scaling triggers. Pick the one that matches your workload — you can also combine multiple rules, in which case the app scales out when any rule threshold is exceeded.
 
 | Rule type | Trigger | Best for | How to test scale-out |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **HTTP** | Concurrent requests at Azure ingress | Public-facing APIs | External load generator (e.g., `hey`, `k6`) |
 | **TCP** | Concurrent TCP connections | gRPC, WebSockets, non-HTTP ingress | External connection flood tool |
 | **Azure Service Bus** | Queue or topic message backlog | Event-driven consumers | Publish N messages to the queue |
@@ -428,7 +426,7 @@ custom_scale_rule {
 Both probes run on a fixed interval and take action when the container fails to respond correctly. The probe type and implementation depend on whether your app is HTTP-based or event-driven.
 
 | Probe | Purpose | Typical check interval | Failure threshold | Action on failure |
-|---|---|---|---|---|
+| --- | --- | --- | --- | --- |
 | **Liveness** | Detect hung or deadlocked containers | 10 seconds | 3 consecutive failures | Container is restarted |
 | **Readiness** | Gate traffic to healthy replicas | 10 seconds | 3 consecutive failures | Replica removed from load balancer |
 
@@ -471,7 +469,7 @@ readiness_probe {
 Event-driven apps have no HTTP ingress — there is no built-in endpoint for Azure to probe. You must embed your own. You have three options — choose based on how much health signal you need:
 
 | Option | Mechanism | Signal quality | Implementation effort |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | **Embedded HTTP health server** (recommended) | Run a lightweight HTTP server on a dedicated port alongside the consumer loop | High — can check consumer liveness, last-message age, broker connectivity | Medium |
 | **TCP probe** | Azure checks that a port is open | Low — only detects crashes, not logical failures | Low |
 | **Heartbeat file + exec probe** | Consumer writes a file every N seconds; probe checks file age | Medium — detects stuck consumers | Medium |
@@ -544,7 +542,7 @@ There is no stateful application data to back up in a typical Container App depl
 Activity Log alerts fire within ~1 minute of a deletion event, notifying the on-call team via email before they would otherwise know.
 
 | Alert | Trigger | Detection time |
-|---|---|---|
+| --- | --- | --- |
 | `alert-container-app-deleted` | `Microsoft.App/containerApps/delete` | ~1 minute |
 | `alert-environment-deleted` | `Microsoft.App/managedEnvironments/delete` | ~1 minute |
 
@@ -609,7 +607,55 @@ After rolling back, update the image tag in your Terraform variables file so the
 
 ---
 
-## 5. Quick Reference Commands
+## 5. Permissions
+
+### Who needs what access
+
+Two identities need Azure permissions to operate this stack: the **human operator** (the person running `terraform apply` or using the portal) and the **Terraform service principal** (the identity Terraform authenticates as in CI/CD).
+
+#### Human operator — minimum roles
+
+| Role | Scope | Why needed |
+| --- | --- | --- |
+| Contributor | Resource group | Create and manage all resources in the stack |
+| User Access Administrator | Resource group | Assign roles (e.g., AcrPull to the Container App identity) |
+| Monitoring Contributor | Resource group | Create and manage alerts, action groups, workbooks |
+| Log Analytics Contributor | Log Analytics workspace | Query logs and manage workspace settings |
+
+> **Note:** If you are not assigning roles via Terraform, you can drop **User Access Administrator** and assign `AcrPull` manually from the portal.
+
+#### Terraform service principal — minimum roles
+
+| Role | Scope | Why needed |
+| --- | --- | --- |
+| Contributor | Resource group | Provision all Azure resources |
+| User Access Administrator | Resource group | Assign `AcrPull` role to the Container App managed identity |
+
+> **Least privilege tip:** If your organisation forbids User Access Administrator, assign the `AcrPull` role manually once and remove the role assignment resources from Terraform. Use `ignore_changes` on the identity block so Terraform does not drift.
+
+---
+
+### How to verify access
+
+Check your current role assignments before running `terraform apply`:
+
+```bash
+# List your own role assignments on the resource group
+az role assignment list \
+  --assignee $(az ad signed-in-user show --query id -o tsv) \
+  --resource-group <resource_group> \
+  --output table
+
+# List role assignments for the Terraform service principal
+az role assignment list \
+  --assignee <service_principal_object_id> \
+  --resource-group <resource_group> \
+  --output table
+```
+
+---
+
+## 6. Quick Reference Commands
 
 ```bash
 # Get the app's public URL (FQDN)
