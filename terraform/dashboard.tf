@@ -31,27 +31,33 @@ resource "azurerm_application_insights_workbook" "main" {
               }
             },
             {
-              id         = "p1-container-app"
-              version    = "KqlParameterItem/1.0"
-              name       = "ContainerApp"
-              label      = "Container App"
-              type       = 5
-              isRequired = true
+              id                      = "p1-container-app"
+              version                 = "KqlParameterItem/1.0"
+              name                    = "ContainerApp"
+              label                   = "Container App"
+              type                    = 5
+              isRequired              = true
+              query                   = "resources\n| where type == 'microsoft.app/containerapps'"
+              crossComponentResources = ["{Subscription}"]
+              queryType               = 1
+              resourceType            = "ms.resourcemanager/tenants"
               typeSettings = {
-                resourceTypeFilter        = { "microsoft.app/containerapps" = true }
                 additionalResourceOptions = []
                 showDefault               = false
               }
             },
             {
-              id         = "p2-app-insights"
-              version    = "KqlParameterItem/1.0"
-              name       = "AppInsights"
-              label      = "Application Insights"
-              type       = 5
-              isRequired = true
+              id                      = "p2-app-insights"
+              version                 = "KqlParameterItem/1.0"
+              name                    = "AppInsights"
+              label                   = "Application Insights"
+              type                    = 5
+              isRequired              = true
+              query                   = "resources\n| where type == 'microsoft.insights/components'"
+              crossComponentResources = ["{Subscription}"]
+              queryType               = 1
+              resourceType            = "ms.resourcemanager/tenants"
               typeSettings = {
-                resourceTypeFilter        = { "microsoft.insights/components" = true }
                 additionalResourceOptions = []
                 showDefault               = false
               }
