@@ -33,7 +33,9 @@ Azure Container Apps expose infrastructure metrics. Application Insights collect
 | `availabilityResults/availabilityPercentage` | `microsoft.insights/components` | % of availability test probes passing | Average |
 
 > **Note for event-driven apps:** `requests/failed` and `availabilityResults/availabilityPercentage` are only meaningful for HTTP-facing apps. For event-driven consumers, focus on `RestartCount`, `WorkingSetBytes`, and `UsageNanoCores` from the Container App, and add service-specific metrics from your broker (e.g., Service Bus dead-letter count, Event Hubs consumer lag) via separate alerts.
+
 > **Note on `WorkingSetBytes`:** This metric only reflects memory that has been written to (committed working set). Allocated but unwritten memory does not appear — this is expected behavior.
+
 > **Note on CPU units:** `UsageNanoCores` is expressed in nanocores. 1 vCPU = 1,000,000,000 nanocores. Set your alert threshold accordingly (e.g., 80% of 0.5 vCPU = 400,000,000 nanocores).
 
 ---
