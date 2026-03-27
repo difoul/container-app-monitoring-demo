@@ -2,6 +2,14 @@ output "resource_group_name" {
   value = azurerm_resource_group.main.name
 }
 
+output "vnet_id" {
+  value = azurerm_virtual_network.main.id
+}
+
+output "container_apps_subnet_id" {
+  value = azurerm_subnet.container_apps.id
+}
+
 output "acr_login_server" {
   value = azurerm_container_registry.main.login_server
 }
@@ -27,4 +35,9 @@ output "application_insights_connection_string" {
 
 output "log_analytics_workspace_id" {
   value = azurerm_log_analytics_workspace.main.workspace_id
+}
+
+output "workbook_id" {
+  value       = azurerm_application_insights_workbook.main.id
+  description = "Azure Portal: Monitor → Workbooks → 'Container App Monitoring'"
 }

@@ -3,6 +3,19 @@ resource "azurerm_container_app_environment" "main" {
   resource_group_name        = azurerm_resource_group.main.name
   location                   = azurerm_resource_group.main.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  infrastructure_subnet_id   = azurerm_subnet.container_apps.id
+  zone_redundancy_enabled    = true
+
+  lifecycle {
+    prevent_destroy = true
+    ignore_changes = [
+      infrastructure_subnet_id,
+      # Azure auto-creates a managed resource group (ME_...) — normalizes after first apply
+      infrastructure_resource_group_name,
+      # Azure injects a default Consumption workload profile not declared in Terraform
+      workload_profile,
+    ]
+  }
 }
 
 resource "azurerm_container_app" "main" {
@@ -28,7 +41,7 @@ resource "azurerm_container_app" "main" {
   }
 
   template {
-    min_replicas = 1
+    min_replicas = 2
     max_replicas = 5
 
     container {
@@ -40,6 +53,26 @@ resource "azurerm_container_app" "main" {
       env {
         name        = "APPLICATIONINSIGHTS_CONNECTION_STRING"
         secret_name = "appinsights-connection-string"
+      }
+
+      liveness_probe {
+        transport = "HTTP"
+        path      = "/health"
+        port      = 8000
+
+        initial_delay           = 5
+        interval_seconds        = 10
+        failure_count_threshold = 3
+      }
+
+      readiness_probe {
+        transport = "HTTP"
+        path      = "/health"
+        port      = 8000
+
+        interval_seconds        = 10
+        failure_count_threshold = 3
+        success_count_threshold = 1
       }
     }
 

@@ -55,7 +55,7 @@ terraform/
 ├── acr.tf               # Azure Container Registry (Basic, admin enabled)
 ├── monitoring.tf        # Log Analytics Workspace + Application Insights
 ├── container_app.tf     # Container Apps Environment + Container App
-├── alerts.tf            # Action group (email) + 4 metric alerts
+├── alerts.tf            # Action group (email) + metric alerts + activity log alerts + availability test
 └── outputs.tf
 ```
 
@@ -76,10 +76,13 @@ All alerts notify via email (action group). Thresholds are based on container al
 
 | Alert | Metric | Threshold |
 |---|---|---|
+| Availability | `availabilityResults/availabilityPercentage` (Web Test) | < 100% from any region |
 | CPU high | `UsageNanoCores` (Container App) | > 400,000,000 (80% of 0.5 vCPU) |
 | Memory high | `WorkingSetBytes` (Container App) | > 858,993,459 bytes (80% of 1Gi) |
 | HTTP 5xx | `requests/failed` (App Insights) | > 10 in 5 min |
 | Container restarts | `RestartCount` (Container App) | > 0 |
+| App deleted | Activity Log `Microsoft.App/containerApps/delete` | Any deletion |
+| Env deleted | Activity Log `Microsoft.App/managedEnvironments/delete` | Any deletion |
 
 ## Deployment Flow
 

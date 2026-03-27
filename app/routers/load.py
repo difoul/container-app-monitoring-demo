@@ -39,6 +39,10 @@ def memory_load(
 ):
     """Allocate the given amount of memory for the given duration."""
     chunk = bytearray(mb * 1024 * 1024)
+    # Write to every page to force the OS to commit physical memory.
+    # bytearray() uses lazy allocation — pages are only added to the working
+    # set when written, so without this the metric never rises.
+    chunk[::4096] = b'\x01' * (len(chunk) // 4096)
 
     def release(data):
         time.sleep(duration)

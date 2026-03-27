@@ -9,12 +9,12 @@ resource "azurerm_monitor_action_group" "email" {
   }
 }
 
-# CPU > 50% of 0.5 vCPU allocation (250,000,000 nanocores)
+# CPU > 80% of 0.5 vCPU allocation (400,000,000 nanocores), using Maximum aggregation
 resource "azurerm_monitor_metric_alert" "cpu" {
   name                = "alert-cpu-high"
   resource_group_name = azurerm_resource_group.main.name
   scopes              = [azurerm_container_app.main.id]
-  description         = "Container App CPU usage above 50% of allocated 0.5 vCPU"
+  description         = "Container App CPU usage above 80% of allocated 0.5 vCPU"
   severity            = 2
   frequency           = "PT1M"
   window_size         = "PT5M"
@@ -22,9 +22,9 @@ resource "azurerm_monitor_metric_alert" "cpu" {
   criteria {
     metric_namespace = "Microsoft.App/containerApps"
     metric_name      = "UsageNanoCores"
-    aggregation      = "Average"
+    aggregation      = "Maximum"
     operator         = "GreaterThan"
-    threshold        = 250000000
+    threshold        = 400000000
   }
 
   action {
@@ -71,6 +71,88 @@ resource "azurerm_monitor_metric_alert" "http_5xx" {
     aggregation      = "Count"
     operator         = "GreaterThan"
     threshold        = 10
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
+# Container App deleted or environment deleted — triggers recovery runbook
+resource "azurerm_monitor_activity_log_alert" "container_app_deleted" {
+  name                = "alert-container-app-deleted"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = "Global"
+  scopes              = [azurerm_resource_group.main.id]
+  description         = "Container App or Container Apps Environment was deleted — trigger recovery runbook"
+
+  criteria {
+    category       = "Administrative"
+    operation_name = "Microsoft.App/containerApps/delete"
+    level          = "Critical"
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
+resource "azurerm_monitor_activity_log_alert" "environment_deleted" {
+  name                = "alert-environment-deleted"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = "Global"
+  scopes              = [azurerm_resource_group.main.id]
+  description         = "Container Apps Environment was deleted — full stack recovery required"
+
+  criteria {
+    category       = "Administrative"
+    operation_name = "Microsoft.App/managedEnvironments/delete"
+    level          = "Critical"
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
+# Availability test — pings /health from 5 Azure regions every 5 minutes
+resource "azurerm_application_insights_standard_web_test" "health" {
+  name                    = "avail-monitoring-demo"
+  resource_group_name     = azurerm_resource_group.main.name
+  location                = azurerm_resource_group.main.location
+  application_insights_id = azurerm_application_insights.main.id
+  frequency               = 300 # every 5 minutes
+
+  geo_locations = [
+    "us-va-ash-azr",   # East US
+    "us-ca-sjc-azr",   # West US
+    "emea-nl-ams-azr", # West Europe
+    "emea-gb-db3-azr", # North Europe
+    "apac-sg-sin-azr", # Southeast Asia
+  ]
+
+  request {
+    url = "https://${azurerm_container_app.main.latest_revision_fqdn}/health"
+  }
+}
+
+# Alert when availability drops below 100% — app is unreachable from at least one region
+# Scoped to App Insights only — availabilityResults metrics are queryable via microsoft.insights/components
+resource "azurerm_monitor_metric_alert" "availability" {
+  name                = "alert-availability"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = [azurerm_application_insights.main.id]
+  description         = "Container App /health endpoint is failing availability checks from at least one region"
+  severity            = 0 # Critical
+  frequency           = "PT1M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "microsoft.insights/components"
+    metric_name      = "availabilityResults/availabilityPercentage"
+    aggregation      = "Average"
+    operator         = "LessThan"
+    threshold        = 100
   }
 
   action {

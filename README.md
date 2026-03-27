@@ -161,6 +161,33 @@ export URL=https://$(az containerapp show \
   --query properties.configuration.ingress.fqdn -o tsv)
 ```
 
+### Availability (App Insights web test)
+
+An availability test pings `/health` from 5 Azure regions every 5 minutes. The alert fires (severity Critical) as soon as the endpoint fails from any single region.
+
+**Check availability results in the portal:**
+App Insights → **Availability** blade — shows pass/fail per region over time.
+
+**Simulate a failure to test the alert:**
+Stop the Container App replicas temporarily:
+```bash
+# Scale to 0 (triggers alert within ~5 minutes)
+az containerapp update \
+  --name monitoring-demo \
+  --resource-group rg-monitoring-demo \
+  --min-replicas 0 --max-replicas 0
+
+# Restore
+az containerapp update \
+  --name monitoring-demo \
+  --resource-group rg-monitoring-demo \
+  --min-replicas 2 --max-replicas 5
+```
+
+> **Note:** Scaling to 0 will cause the availability test to fail, triggering the alert. Wait ~5–10 minutes for the alert to fire and the email to arrive.
+
+---
+
 ### HTTP errors (App Insights `requests/failed`)
 
 ```bash
@@ -275,3 +302,119 @@ requests
 | summarize count() by bin(timestamp, 30s)
 | render timechart
 ```
+
+---
+
+## Backup and Recovery
+
+### What is backed up
+
+This stack is fully declared in Terraform. The Terraform code **is** the backup — every resource (Container App, Environment, networking, alerts, monitoring) can be recreated from it. The container image is stored in ACR and survives independently of the Container App.
+
+There is no stateful application data to back up: the Container App is stateless.
+
+---
+
+### Deletion alerts
+
+Two Activity Log alerts fire immediately when a deletion is detected:
+
+| Alert | Trigger |
+|---|---|
+| `alert-container-app-deleted` | `Microsoft.App/containerApps/delete` operation |
+| `alert-environment-deleted` | `Microsoft.App/managedEnvironments/delete` operation |
+
+Both alert via email (same action group as metric alerts). Activity Log alerts fire within ~1 minute of the deletion event.
+
+---
+
+### Recovery runbook
+
+#### Scenario A — Container App deleted (environment still exists)
+
+This is the most likely accidental deletion. The environment, networking, monitoring, and ACR image are intact.
+
+**Estimated recovery time: ~3 minutes**
+
+```bash
+cd terraform
+terraform apply
+```
+
+Terraform detects the missing Container App and recreates it using the image currently referenced in `terraform.tfvars`. Verify:
+
+```bash
+terraform output container_app_url
+curl https://<container_app_url>/health
+```
+
+---
+
+#### Scenario B — Container Apps Environment deleted (app also gone)
+
+The environment cannot be deleted while the app exists, so both are gone. Networking, ACR, and monitoring are intact.
+
+**Estimated recovery time: ~10–15 minutes** (environment provisioning takes time)
+
+```bash
+cd terraform
+terraform apply
+```
+
+Terraform recreates the environment and the Container App. The environment has `prevent_destroy = true` in the Terraform config — this prevents accidental `terraform destroy` from removing it, but a manual deletion (portal/CLI) bypasses this protection.
+
+Verify:
+
+```bash
+terraform output container_app_url
+curl https://<container_app_url>/health
+```
+
+> **Note:** If the environment was deleted manually (not via Terraform), run `terraform plan` first to confirm the full list of resources Terraform will recreate before applying.
+
+---
+
+#### Scenario C — Wrong image deployed (rollback)
+
+If a bad image was pushed and deployed, roll back to a previous image tag:
+
+```bash
+# List available tags in ACR
+az acr repository show-tags \
+  --name <acr_name> \
+  --repository monitoring-demo \
+  --orderby time_desc \
+  --output table
+
+# Roll back to a previous tag
+az containerapp update \
+  --name monitoring-demo \
+  --resource-group rg-monitoring-demo \
+  --image <acr_login_server>/monitoring-demo:<previous_tag>
+```
+
+Then update `container_image` in `terraform.tfvars` to match, so the next `terraform apply` does not overwrite it.
+
+---
+
+### Testing the deletion alert
+
+To verify the alert fires without destroying production infrastructure, use a test Container App:
+
+```bash
+# Create a throwaway container app
+az containerapp create \
+  --name monitoring-demo-test \
+  --resource-group rg-monitoring-demo \
+  --environment cae-monitoring-demo \
+  --image mcr.microsoft.com/azuredocs/containerapps-helloworld:latest \
+  --ingress external --target-port 80
+
+# Delete it — this should trigger the alert-container-app-deleted alert
+az containerapp delete \
+  --name monitoring-demo-test \
+  --resource-group rg-monitoring-demo \
+  --yes
+```
+
+Check the alert fired: Azure Portal → Monitor → Alerts → Alert history.
