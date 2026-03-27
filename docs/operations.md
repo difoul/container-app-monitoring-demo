@@ -137,6 +137,200 @@ All metric alerts should share the same evaluation settings for consistent behav
 
 ---
 
+### Terraform examples
+
+#### Action group (shared by all metric alerts)
+
+> **Note:** Action groups support other notification channels beyond email — including SMS, voice call, Azure app push notification, webhook, Azure Function, Logic App, and ITSM connectors (e.g., ServiceNow, PagerDuty). Add the corresponding receiver block (e.g., `sms_receiver`, `webhook_receiver`, `azure_function_receiver`) alongside or instead of `email_receiver` in the same action group.
+
+```hcl
+resource "azurerm_monitor_action_group" "email" {
+  name                = "ag-<prefix>-email"
+  resource_group_name = azurerm_resource_group.main.name
+  short_name          = "<prefix>"
+
+  email_receiver {
+    name          = "oncall"
+    email_address = var.alert_email
+  }
+}
+```
+
+#### Availability alert (scoped to App Insights)
+
+```hcl
+resource "azurerm_monitor_metric_alert" "availability" {
+  name                = "alert-availability-down"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = [azurerm_application_insights.main.id]
+  description         = "Availability dropped below 100%"
+  severity            = 0
+  frequency           = "PT1M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "microsoft.insights/components"
+    metric_name      = "availabilityResults/availabilityPercentage"
+    aggregation      = "Average"
+    operator         = "LessThan"
+    threshold        = 100
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+```
+
+#### HTTP 5xx spike alert
+
+```hcl
+resource "azurerm_monitor_metric_alert" "http_5xx" {
+  name                = "alert-http-5xx"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = [azurerm_application_insights.main.id]
+  description         = "More than 10 failed requests in 5 minutes"
+  severity            = 1
+  frequency           = "PT1M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "microsoft.insights/components"
+    metric_name      = "requests/failed"
+    aggregation      = "Count"
+    operator         = "GreaterThan"
+    threshold        = 10
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+```
+
+#### Container restart alert
+
+```hcl
+resource "azurerm_monitor_metric_alert" "restarts" {
+  name                = "alert-container-restarts"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = [azurerm_container_app.main.id]
+  description         = "Container has restarted at least once"
+  severity            = 1
+  frequency           = "PT1M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "Microsoft.App/containerApps"
+    metric_name      = "RestartCount"
+    aggregation      = "Total"
+    operator         = "GreaterThan"
+    threshold        = 0
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+```
+
+#### CPU high alert
+
+```hcl
+# Threshold: 80% of 0.5 vCPU = 400,000,000 nanocores. Scale proportionally.
+resource "azurerm_monitor_metric_alert" "cpu_high" {
+  name                = "alert-cpu-high"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = [azurerm_container_app.main.id]
+  description         = "CPU exceeded 80% of allocation"
+  severity            = 2
+  frequency           = "PT1M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "Microsoft.App/containerApps"
+    metric_name      = "UsageNanoCores"
+    aggregation      = "Maximum"
+    operator         = "GreaterThan"
+    threshold        = 400000000
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+```
+
+#### Memory high alert
+
+```hcl
+# Threshold: 80% of 1Gi = 858,993,459 bytes. Scale proportionally.
+resource "azurerm_monitor_metric_alert" "memory_high" {
+  name                = "alert-memory-high"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = [azurerm_container_app.main.id]
+  description         = "Memory exceeded 80% of allocation"
+  severity            = 2
+  frequency           = "PT1M"
+  window_size         = "PT5M"
+
+  criteria {
+    metric_namespace = "Microsoft.App/containerApps"
+    metric_name      = "WorkingSetBytes"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = 858993459
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+```
+
+#### Activity log alerts (deletion events)
+
+```hcl
+# Both alerts must be scoped to the resource group (not individual resources)
+# and require location = "Global" — Activity Log alerts are not regional.
+
+resource "azurerm_monitor_activity_log_alert" "app_deleted" {
+  name                = "alert-container-app-deleted"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = "Global"
+  scopes              = [azurerm_resource_group.main.id]
+  description         = "Container App was deleted"
+
+  criteria {
+    category       = "Administrative"
+    operation_name = "Microsoft.App/containerApps/delete"
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
+resource "azurerm_monitor_activity_log_alert" "env_deleted" {
+  name                = "alert-environment-deleted"
+  resource_group_name = azurerm_resource_group.main.name
+  location            = "Global"
+  scopes              = [azurerm_resource_group.main.id]
+  description         = "Container Apps Environment was deleted"
+
+  criteria {
+    category       = "Administrative"
+    operation_name = "Microsoft.App/managedEnvironments/delete"
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+```
+
+---
+
 ### How to respond to alerts
 
 When an alert fires, follow the first steps below to triage quickly.
