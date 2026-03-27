@@ -60,7 +60,8 @@ Azure Container Apps expose infrastructure metrics. Application Insights collect
 
 Open **Log Analytics workspace → Logs** and use the following queries to investigate issues.
 
-**Failed requests — last 30 minutes**
+#### Failed requests — last 30 minutes
+
 ```kusto
 requests
 | where timestamp > ago(30m) and success == false
@@ -68,7 +69,8 @@ requests
 | order by timestamp desc
 ```
 
-**Request rate over time**
+#### Request rate over time
+
 ```kusto
 requests
 | where timestamp > ago(1h)
@@ -76,7 +78,8 @@ requests
 | render timechart
 ```
 
-**Request rate by HTTP status code**
+#### Request rate by HTTP status code
+
 ```kusto
 requests
 | where timestamp > ago(30m)
@@ -84,7 +87,8 @@ requests
 | render timechart
 ```
 
-**Container restarts and OOM kills**
+#### Container restarts and OOM kills
+
 ```kusto
 ContainerAppSystemLogs_CL
 | where TimeGenerated > ago(1h)
@@ -125,7 +129,8 @@ All metric alerts should share the same evaluation settings for consistent behav
 | Aggregation window | 5 minutes |
 | Notification channel | Email via action group |
 
-**Key considerations:**
+#### Key considerations
+
 - **Activity Log alerts** (app/environment deleted) must be scoped to the **resource group**, not the individual resource, and require `location = "Global"`.
 - **Availability alerts** must be scoped to the **Application Insights resource** (not the web test), using namespace `microsoft.insights/components`.
 - **Metric alerts** on Container App metrics must be scoped to the **Container App resource**.
@@ -182,7 +187,8 @@ Azure Container Apps supports several scaling triggers. Pick the one that matche
 
 > **Self-request caveat (HTTP rule):** If your container sends requests to itself, those bypass Azure ingress and do not count toward the HTTP scaling metric. Always use an external client to test HTTP scale-out.
 
-**Terraform example — HTTP rule:**
+#### Terraform example — HTTP rule
+
 ```hcl
 http_scale_rule {
   name                = "http-scaling"
@@ -190,7 +196,8 @@ http_scale_rule {
 }
 ```
 
-**Terraform example — Service Bus rule:**
+#### Terraform example — Service Bus rule
+
 ```hcl
 custom_scale_rule {
   name             = "servicebus-scaling"
@@ -207,7 +214,8 @@ custom_scale_rule {
 }
 ```
 
-**Terraform example — CPU rule:**
+#### Terraform example — CPU rule
+
 ```hcl
 custom_scale_rule {
   name             = "cpu-scaling"
@@ -274,7 +282,7 @@ Event-driven apps have no HTTP ingress — there is no built-in endpoint for Azu
 | **TCP probe** | Azure checks that a port is open | Low — only detects crashes, not logical failures | Low |
 | **Heartbeat file + exec probe** | Consumer writes a file every N seconds; probe checks file age | Medium — detects stuck consumers | Medium |
 
-**Option 1 — Embedded HTTP health server (recommended)**
+##### Option 1 — Embedded HTTP health server (recommended)
 
 Run a background thread/task that exposes `GET /health` on a dedicated port (e.g., 8080). Return 200 only when all three conditions pass:
 
@@ -293,7 +301,7 @@ liveness_probe {
 }
 ```
 
-**Option 2 — TCP probe**
+##### Option 2 — TCP probe
 
 Useful when you only need crash detection and don't want to add an HTTP server.
 
@@ -307,7 +315,7 @@ liveness_probe {
 }
 ```
 
-**Option 3 — Heartbeat file**
+##### Option 3 — Heartbeat file
 
 The consumer loop writes `/tmp/healthy` every 30 seconds. The probe checks that the file exists and is recent. Requires a custom exec probe — not natively supported in Azure Container Apps today; use this pattern on AKS instead.
 
@@ -318,6 +326,7 @@ The consumer loop writes `/tmp/healthy` every 30 seconds. The probe checks that 
 ### How scale-in works
 
 Regardless of the scaling rule type, scale-in behavior is the same:
+
 - Azure waits ~5 minutes of sustained low activity before removing a replica
 - The replica count never drops below `min_replicas`
 - Scale-in is gradual — replicas are removed one at a time
@@ -351,7 +360,7 @@ Activity Log alerts fire within ~1 minute of a deletion event, notifying the on-
 
 #### Scenario A — Container App deleted (environment still exists)
 
-**Estimated recovery time: ~3 minutes**
+Estimated recovery time: ~3 minutes
 
 The environment, networking, ACR image, and monitoring are intact. Only the app needs to be recreated.
 
@@ -362,6 +371,7 @@ terraform apply
 ```
 
 Verify recovery:
+
 ```bash
 curl https://<app_fqdn>/health
 ```
@@ -370,7 +380,7 @@ curl https://<app_fqdn>/health
 
 #### Scenario B — Container Apps Environment deleted (app also gone)
 
-**Estimated recovery time: ~10–15 minutes**
+Estimated recovery time: ~10–15 minutes
 
 Environment provisioning takes several minutes. Networking, ACR, and monitoring are intact and do not need to be recreated.
 
