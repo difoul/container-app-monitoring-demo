@@ -32,6 +32,8 @@ Azure Container Apps expose infrastructure metrics. Application Insights collect
 | `requests/failed` | `microsoft.insights/components` | HTTP requests tracked as failures by App Insights | Count |
 | `availabilityResults/availabilityPercentage` | `microsoft.insights/components` | % of availability test probes passing | Average |
 
+> **Note for event-driven apps:** `requests/failed` and `availabilityResults/availabilityPercentage` are only meaningful for HTTP-facing apps. For event-driven consumers, focus on `RestartCount`, `WorkingSetBytes`, and `UsageNanoCores` from the Container App, and add service-specific metrics from your broker (e.g., Service Bus dead-letter count, Event Hubs consumer lag) via separate alerts.
+
 > **Note on `WorkingSetBytes`:** This metric only reflects memory that has been written to (committed working set). Allocated but unwritten memory does not appear — this is expected behavior.
 
 > **Note on CPU units:** `UsageNanoCores` is expressed in nanocores. 1 vCPU = 1,000,000,000 nanocores. Set your alert threshold accordingly (e.g., 80% of 0.5 vCPU = 400,000,000 nanocores).
@@ -157,15 +159,71 @@ The following settings give you zone-redundant, fault-tolerant deployment with a
 | VNet integration | Dedicated /23 subnet | Required for zone redundancy; network isolation |
 | Min replicas | 2 | Survives a single zone failure without downtime |
 | Max replicas | Set based on cost cap | Limits autoscaling spend |
-| Scaling rule | HTTP — concurrent requests | Scales on real ingress traffic only |
+| Scaling rule | See options below | Depends on workload type |
 
 > **Important:** Zone redundancy cannot be enabled or disabled after the environment is created. It must be set at creation time and requires a dedicated subnet.
 
 ---
 
+### How to choose a scaling rule
+
+Azure Container Apps supports several scaling triggers. Pick the one that matches your workload — you can also combine multiple rules, in which case the app scales out when any rule threshold is exceeded.
+
+| Rule type | Trigger | Best for | How to test scale-out |
+|---|---|---|---|
+| **HTTP** | Concurrent requests at Azure ingress | Public-facing APIs | External load generator (e.g., `hey`, `k6`) |
+| **TCP** | Concurrent TCP connections | gRPC, WebSockets, non-HTTP ingress | External connection flood tool |
+| **Azure Service Bus** | Queue or topic message backlog | Event-driven consumers | Publish N messages to the queue |
+| **Azure Event Hubs** | Partition lag (unprocessed events) | Stream processing | Produce events faster than the consumer processes them |
+| **Azure Storage Queue** | Queue message count | Background job workers | Enqueue N messages |
+| **CPU** | CPU utilization % | CPU-bound workloads | CPU load generator (e.g., `stress`) |
+| **Memory** | Memory utilization % | Memory-bound workloads | Memory allocation load test |
+| **Custom (KEDA)** | Any KEDA scaler metric | Any other trigger | Depends on the scaler |
+
+> **Self-request caveat (HTTP rule):** If your container sends requests to itself, those bypass Azure ingress and do not count toward the HTTP scaling metric. Always use an external client to test HTTP scale-out.
+
+**Terraform example — HTTP rule:**
+```hcl
+http_scale_rule {
+  name                = "http-scaling"
+  concurrent_requests = "10"
+}
+```
+
+**Terraform example — Service Bus rule:**
+```hcl
+custom_scale_rule {
+  name             = "servicebus-scaling"
+  custom_rule_type = "azure-servicebus"
+  metadata = {
+    queueName    = "my-queue"
+    namespace    = "my-servicebus-namespace"
+    messageCount = "10"
+  }
+  authentication {
+    secret_ref        = "servicebus-connection-string"
+    trigger_parameter = "connection"
+  }
+}
+```
+
+**Terraform example — CPU rule:**
+```hcl
+custom_scale_rule {
+  name             = "cpu-scaling"
+  custom_rule_type = "cpu"
+  metadata = {
+    type  = "Utilization"
+    value = "70"
+  }
+}
+```
+
+---
+
 ### How health probes work
 
-Configure both probes to target your health endpoint (e.g., `GET /health`). The container must return HTTP 200 for the probe to pass.
+Both probes run on a fixed interval and take action when the container fails to respond correctly. The probe type and implementation depend on whether your app is HTTP-based or event-driven.
 
 | Probe | Purpose | Typical check interval | Failure threshold | Action on failure |
 |---|---|---|---|---|
@@ -176,11 +234,93 @@ Start with an `initial_delay` of 5–10 seconds to give the container time to st
 
 ---
 
-### How autoscaling works
+#### HTTP / API apps
 
-- **Scale-out** is triggered when concurrent HTTP requests at Azure ingress exceed the configured threshold.
-- **Scale-in** happens automatically after ~5 minutes of low traffic, down to `min_replicas`.
-- Self-requests made by the container to itself bypass Azure ingress and **do not** count toward the scaling metric. Use an external load generator (e.g., `hey`, `k6`) to test scale-out.
+Configure both probes as HTTP probes targeting `GET /health` on the app port.
+
+> **Application requirement:** Your application must implement this endpoint. Azure does not provide one. If it is missing or returns non-200, the liveness probe will restart your container in a loop and the readiness probe will keep it out of the load balancer.
+
+Minimum implementation: `GET /health` returns HTTP 200. Optionally add dependency checks (database, downstream services) to make the probe more meaningful.
+
+```hcl
+liveness_probe {
+  transport               = "HTTP"
+  path                    = "/health"
+  port                    = 8000
+  initial_delay           = 5
+  interval_seconds        = 10
+  failure_count_threshold = 3
+}
+
+readiness_probe {
+  transport               = "HTTP"
+  path                    = "/health"
+  port                    = 8000
+  interval_seconds        = 10
+  failure_count_threshold = 3
+  success_count_threshold = 1
+}
+```
+
+---
+
+#### Event-driven apps
+
+Event-driven apps have no HTTP ingress — there is no built-in endpoint for Azure to probe. You must embed your own. You have three options — choose based on how much health signal you need:
+
+| Option | Mechanism | Signal quality | Implementation effort |
+|---|---|---|---|
+| **Embedded HTTP health server** (recommended) | Run a lightweight HTTP server on a dedicated port alongside the consumer loop | High — can check consumer liveness, last-message age, broker connectivity | Medium |
+| **TCP probe** | Azure checks that a port is open | Low — only detects crashes, not logical failures | Low |
+| **Heartbeat file + exec probe** | Consumer writes a file every N seconds; probe checks file age | Medium — detects stuck consumers | Medium |
+
+**Option 1 — Embedded HTTP health server (recommended)**
+
+Run a background thread/task that exposes `GET /health` on a dedicated port (e.g., 8080). Return 200 only when all three conditions pass:
+
+1. The consumer task is alive (not crashed or deadlocked)
+2. The last message was processed within an acceptable window (e.g., 5× the expected message interval)
+3. The broker connection is reachable
+
+```hcl
+liveness_probe {
+  transport               = "HTTP"
+  path                    = "/health"
+  port                    = 8080   # dedicated health port, separate from any ingress
+  initial_delay           = 10
+  interval_seconds        = 10
+  failure_count_threshold = 3
+}
+```
+
+**Option 2 — TCP probe**
+
+Useful when you only need crash detection and don't want to add an HTTP server.
+
+```hcl
+liveness_probe {
+  transport               = "TCP"
+  port                    = 8080
+  initial_delay           = 5
+  interval_seconds        = 10
+  failure_count_threshold = 3
+}
+```
+
+**Option 3 — Heartbeat file**
+
+The consumer loop writes `/tmp/healthy` every 30 seconds. The probe checks that the file exists and is recent. Requires a custom exec probe — not natively supported in Azure Container Apps today; use this pattern on AKS instead.
+
+> **Recommendation:** Use Option 1 for production. The embedded HTTP server gives you meaningful health signal (not just "the process is alive") and works natively with Azure Container Apps HTTP probes without any platform restrictions.
+
+---
+
+### How scale-in works
+
+Regardless of the scaling rule type, scale-in behavior is the same:
+- Azure waits ~5 minutes of sustained low activity before removing a replica
+- The replica count never drops below `min_replicas`
+- Scale-in is gradual — replicas are removed one at a time
 
 ---
 
