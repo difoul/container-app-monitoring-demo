@@ -14,6 +14,7 @@ This guide covers how to monitor, alert, scale, and recover an Azure Container A
 | Alerting | Azure Monitor Metric Alerts + Activity Log Alerts |
 | Availability monitoring | Application Insights Standard Web Test |
 | Visualization | Azure Monitor Workbook |
+| Multi-region routing & failover | Azure Front Door Standard |
 
 ---
 
@@ -797,6 +798,10 @@ terraform apply
 
 ---
 
+> **Note:** The scenarios above cover single-resource recovery within a region. For full region failure and multi-region failover, see section 6 (Disaster Recovery).
+
+---
+
 #### Scenario C — Bad image deployed (rollback needed)
 
 ```bash
@@ -818,7 +823,368 @@ After rolling back, update the image tag in your Terraform variables file so the
 
 ---
 
-## 6. Permissions
+## 6. Disaster Recovery
+
+### Architecture design
+
+#### Why multi-region is necessary
+
+Azure Container Apps is a **single-region service**. If the region becomes unavailable, the entire environment and all apps within it are also unavailable. Zone redundancy (section 4) protects against zone-level failures within a region, but it does not protect against a full regional outage.
+
+To survive a region failure, the app must be deployed independently in a second region with a global routing layer in front that can detect the failure and redirect traffic automatically.
+
+---
+
+#### Deployment model: Active-Passive (Warm Standby)
+
+| Model | Primary | Secondary | RTO | RPO | Cost |
+| --- | --- | --- | --- | --- | --- |
+| **Active-Passive (warm standby)** ← recommended | Handles all traffic | Deployed, min 1 replica running | ~1–3 min | ~0 (stateless) | Medium |
+| Active-Active | Both regions handle traffic equally | Same as primary | ~0 | ~0 | High |
+| Active-Passive (cold standby) | Handles all traffic | Not deployed until disaster | ~15–20 min | ~0 (stateless) | Low |
+
+**Rationale for active-passive warm standby:**
+- Secondary is always running with 1 replica — ready to accept traffic within seconds of AFD detecting failure
+- Lower cost than active-active (one region handles most traffic)
+- RTO of ~1–3 minutes is acceptable for most non-critical workloads
+- This app is stateless — RPO is effectively zero (no data to lose)
+
+---
+
+#### Why Azure Front Door over Traffic Manager
+
+Both services provide multi-region routing. For this workload, Azure Front Door Standard is the correct choice:
+
+| Criterion | Azure Front Door Standard | Azure Traffic Manager |
+| --- | --- | --- |
+| Protocol | HTTP/S (Layer 7) — matches this FastAPI app | DNS-based (any protocol) |
+| Failover mechanism | Health probes + automatic rerouting at edge | DNS TTL-based rerouting (60s+ propagation delay) |
+| Failover speed | ~1 min (probe interval + detection) | ~1–5 min + DNS TTL |
+| WAF | Custom rules included (free) | Not included |
+| TLS termination | At edge (offload from origin) | Not provided |
+| Caching / acceleration | Yes | No |
+| Cost | $35/month base + per-request | ~$0.60/million DNS queries |
+
+> **Rule of thumb:** Use Azure Front Door for HTTP/S workloads. Use Traffic Manager for non-HTTP protocols or DNS-level routing of multi-tier architectures.
+
+---
+
+#### Architecture overview
+
+```
+                        ┌─────────────────────────────────────────────────────┐
+                        │              Azure Front Door Standard               │
+                        │                                                      │
+                        │   Origin Group: priority routing                     │
+                        │   ├── Origin 1 (priority 1): Primary app FQDN       │
+                        │   └── Origin 2 (priority 2): Secondary app FQDN     │
+                        │                                                      │
+                        │   Health probe: GET /health every 30s                │
+                        │   Failover: automatic when origin returns non-2xx    │
+                        └───────────────┬─────────────────────┬────────────────┘
+                                        │ normal               │ during failure
+                                        ▼                      ▼
+                   ┌─────────────────────────┐    ┌─────────────────────────┐
+                   │   Primary Region        │    │   Secondary Region      │
+                   │   (e.g. East US)        │    │   (e.g. West US 2)      │
+                   │                         │    │                         │
+                   │   Container Apps Env    │    │   Container Apps Env    │
+                   │   ├── Zone-redundant    │    │   ├── Zone-redundant    │
+                   │   ├── VNet /23          │    │   ├── VNet /23          │
+                   │   └── Container App     │    │   └── Container App     │
+                   │       min_replicas: 2   │    │       min_replicas: 1   │
+                   │       max_replicas: 5   │    │       max_replicas: 5   │
+                   │                         │    │                         │
+                   │   Log Analytics (pri)   │    │   Log Analytics (sec)   │
+                   │   App Insights (pri)    │    │   App Insights (sec)    │
+                   └─────────────────────────┘    └─────────────────────────┘
+                                        │                      │
+                                        └──────────┬───────────┘
+                                                   │
+                                    ┌──────────────┴──────────────┐
+                                    │    Azure Container Registry  │
+                                    │    (single registry, or      │
+                                    │     Premium + geo-replica)   │
+                                    └──────────────────────────────┘
+```
+
+**Traffic flow:**
+- Normal: AFD routes 100% of traffic to primary. Secondary runs idle at 1 replica.
+- Failure detected: AFD health probes detect primary returning 503 (or timing out). AFD automatically routes 100% of traffic to secondary within ~1 minute.
+- Recovery: Primary health probes return 200. AFD gradually restores traffic to primary (failback).
+
+---
+
+#### Key environment variables per deployment
+
+These must be set as environment variables on each Container App to identify the deployment in DR status responses and logs:
+
+| Variable | Primary value | Secondary value |
+| --- | --- | --- |
+| `REGION_NAME` | `eastus` | `westus2` |
+| `INSTANCE_ROLE` | `primary` | `secondary` |
+
+---
+
+#### ACR options for multi-region image availability
+
+| Option | How | Cost | Resilience |
+| --- | --- | --- | --- |
+| **Single Basic ACR** (default, demo-friendly) | Both regions pull from same ACR endpoint | $5/month | Fails if ACR region goes down |
+| **ACR Premium + geo-replication** (production) | Upgrade to Premium, add replica in secondary region | ~$40/month | Images available even if primary ACR region fails |
+
+> For production: always use ACR Premium with geo-replication. ACR Traffic Manager automatically routes image pulls to the nearest healthy replica.
+
+---
+
+### RTO and RPO targets
+
+| Scenario | RTO | RPO | Notes |
+| --- | --- | --- | --- |
+| Primary region failure (AFD automatic failover) | ~1–3 min | 0 | AFD detects via health probe; stateless app loses no data |
+| Manual forced failover | <1 min | 0 | Via AFD portal or CLI (drain primary origin) |
+| Primary region recovery (failback) | ~1–3 min | 0 | AFD re-detects healthy origin and restores routing |
+| ACR outage (with geo-replication) | 0 | 0 | ACR Traffic Manager routes pulls to secondary replica |
+| ACR outage (without geo-replication) | Minutes to hours | 0 | New replicas cannot start; existing replicas unaffected |
+
+---
+
+### DR simulation endpoints
+
+The application exposes four endpoints for testing and validating the DR failover flow without requiring an actual Azure region failure.
+
+| Endpoint | Method | Purpose |
+| --- | --- | --- |
+| `GET /dr/region` | GET | Returns the region and role (`primary`/`secondary`) of this instance |
+| `GET /dr/status` | GET | Returns health, region, role, and uptime — use to verify which region is serving traffic |
+| `POST /dr/degrade` | POST | Sets `/health` to return 503 — triggers AFD failover to secondary |
+| `POST /dr/recover` | POST | Resets `/health` to return 200 — triggers AFD failback to primary |
+
+> **Multi-replica caveat:** The degraded state is per-process. In a multi-replica deployment, each replica must be independently degraded for AFD to fail over (AFD health probes use round-robin across replicas). Set `min_replicas=1` on the primary before running DR failover tests to ensure a single probe target.
+
+---
+
+### Cost estimation
+
+The following costs are **additional** to the existing single-region deployment. All estimates use US East / US West 2 pricing and assume low demo-level traffic.
+
+#### Monthly cost breakdown
+
+| Component | Details | Estimated cost |
+| --- | --- | --- |
+| **Container App — secondary** | 1 replica × 0.5 vCPU × 1 GiB, warm standby 24/7 | ~$39/month |
+| **Azure Front Door Standard** | Base fee $35 + ~$5 requests + ~$2 egress | ~$42/month |
+| **Log Analytics — secondary** | Minimal log ingestion (<1 GB/month) | ~$3/month |
+| **App Insights — secondary** | Minimal telemetry (<1 GB/month) | ~$3/month |
+| **VNet + subnet — secondary** | Consumption-only VNet integration | ~$0/month |
+| **ACR (Option A: keep Basic)** | No change, single ACR | $0 additional |
+| **ACR (Option B: Premium + geo-replica)** | Upgrade from Basic ($5) to Premium + 1 replica | +$35/month |
+
+#### Total additional monthly cost
+
+| Configuration | Additional monthly cost |
+| --- | --- |
+| **Recommended (demo):** AFD + warm standby + single ACR | **~$87/month** |
+| **Production:** AFD + warm standby + ACR Premium + geo-replica | **~$122/month** |
+
+#### Secondary app cost breakdown
+
+The secondary Container App runs on the Consumption plan. Pricing:
+- vCPU: $0.000024/vCPU-second
+- Memory: $0.000003/GiB-second
+- Free grant: first 180,000 vCPU-seconds and 360,000 GiB-seconds per subscription per month
+
+With 1 replica at 0.5 vCPU / 1 GiB running 24/7:
+- vCPU: 0.5 × 86,400 × 30 = 1,296,000 vCPU-sec → $31.10/month
+- Memory: 1 × 86,400 × 30 = 2,592,000 GiB-sec → $7.78/month
+- Total before free grant: **~$38.88/month**
+
+> Reduce secondary to `min_replicas=0` (cold standby) to bring this cost to ~$0, at the expense of increasing RTO to ~10–15 minutes (environment + container startup time).
+
+#### Cost levers
+
+| Action | Monthly saving | Trade-off |
+| --- | --- | --- |
+| Cold standby (min_replicas=0) | ~$39/month | RTO increases to 10–15 min |
+| Skip ACR geo-replication | ~$35/month | Image pull fails if ACR region is down |
+| AFD Standard vs Premium | $295/month | No managed WAF rules, no Private Link |
+
+---
+
+### Runbook: Scenario D — Primary region failure (automatic failover)
+
+**Trigger:** Azure region hosting the primary Container App becomes fully unavailable (region outage, not just a single resource deletion).
+
+**Detection:** AFD health probes to primary origin stop receiving 200 responses. AFD automatically begins routing all traffic to secondary within ~1 minute.
+
+**Estimated RTO:** ~1–3 minutes (probe detection + routing propagation)
+
+**Step-by-step response:**
+
+1. **Confirm the failure** — check Azure Service Health for a regional outage:
+   ```bash
+   az rest --method GET \
+     --url "https://management.azure.com/subscriptions/<subscription_id>/providers/Microsoft.ResourceHealth/events?api-version=2022-10-01" \
+     --query "value[?properties.eventType=='ServiceIssue'].{title:properties.title, region:properties.impactedRegions[0].id}" \
+     -o table
+   ```
+
+2. **Verify AFD has failed over** — confirm traffic is now served from secondary:
+   ```bash
+   # The response region should show the secondary region
+   curl https://<afd_endpoint>.z01.azurefd.net/dr/region
+   ```
+
+3. **Verify secondary is healthy:**
+   ```bash
+   curl https://<afd_endpoint>.z01.azurefd.net/dr/status
+   curl https://<afd_endpoint>.z01.azurefd.net/health
+   ```
+
+4. **Monitor secondary under full load** — check replica count and scale-out:
+   ```bash
+   az containerapp replica list \
+     --name <secondary_app_name> \
+     --resource-group <secondary_rg> \
+     --query "[].{name:name, state:properties.runningState}" \
+     -o table
+   ```
+
+5. **Notify stakeholders** — AFD fires no default alert on origin failure. Set up an AFD metric alert on `OriginHealthPercentage < 100` to get notified automatically.
+
+6. **Wait for primary region recovery** — do not attempt manual recovery until Azure confirms the region is healthy. Follow Scenario F for failback.
+
+---
+
+### Runbook: Scenario E — DR test (simulate failure with `/dr/degrade`)
+
+Use this runbook to validate the full failover path without a real outage.
+
+**Pre-conditions:**
+- Primary and secondary both deployed and registered as origins in AFD
+- AFD health probes are active on both origins (`GET /health`, 30-second interval)
+- Primary `min_replicas=1` (ensures only one probe target for clean test)
+
+**Step-by-step:**
+
+1. **Confirm baseline — both regions healthy:**
+   ```bash
+   curl https://<primary_fqdn>/dr/region    # should show primary
+   curl https://<secondary_fqdn>/dr/region  # should show secondary
+   curl https://<afd_endpoint>.z01.azurefd.net/dr/region  # should show primary
+   ```
+
+2. **Trigger simulated failure on primary:**
+   ```bash
+   curl -X POST https://<primary_fqdn>/dr/degrade
+   # Response: {"status": "degraded", "message": "..."}
+   ```
+
+3. **Confirm /health on primary now returns 503:**
+   ```bash
+   curl -i https://<primary_fqdn>/health
+   # HTTP/1.1 503 Service Unavailable
+   ```
+
+4. **Wait for AFD to detect failure** (~30–60 seconds based on probe interval):
+   ```bash
+   # Poll until region switches
+   watch -n 5 "curl -s https://<afd_endpoint>.z01.azurefd.net/dr/region"
+   ```
+
+5. **Confirm traffic is now served from secondary:**
+   ```bash
+   curl https://<afd_endpoint>.z01.azurefd.net/dr/region
+   # {"region": "westus2", "role": "secondary"}
+   ```
+
+6. **Recover primary and test failback:**
+   ```bash
+   curl -X POST https://<primary_fqdn>/dr/recover
+   # Wait 30–60 seconds for AFD to detect recovery
+   curl https://<afd_endpoint>.z01.azurefd.net/dr/region
+   # {"region": "eastus", "role": "primary"}
+   ```
+
+7. **Record results** — document actual detection time, failover time, and failback time against RTO targets.
+
+---
+
+### Runbook: Scenario F — Failback after primary region recovery
+
+Use this runbook after the primary region recovers from a real outage (following Scenario D).
+
+1. **Confirm primary region is available** via Azure Service Health.
+
+2. **Verify primary Container App is healthy** — check the primary directly (bypassing AFD):
+   ```bash
+   curl https://<primary_app_fqdn>/health    # must return 200
+   curl https://<primary_app_fqdn>/dr/status # confirm region + healthy=true
+   ```
+
+3. **Wait for AFD automatic failback** — AFD re-enables the primary origin once health probes pass. No manual action is required. This typically takes 1–3 minutes.
+
+4. **Confirm AFD is routing to primary:**
+   ```bash
+   curl https://<afd_endpoint>.z01.azurefd.net/dr/region
+   # {"region": "eastus", "role": "primary"}
+   ```
+
+5. **If AFD does not fail back automatically** — force it via the portal or CLI:
+   ```bash
+   # Re-enable primary origin in the AFD origin group if it was manually disabled
+   az afd origin update \
+     --resource-group <rg> \
+     --profile-name <afd_profile> \
+     --origin-group-name <origin_group> \
+     --origin-name primary \
+     --enabled-state Enabled
+   ```
+
+6. **Scale secondary back to min_replicas=1** if it was scaled up during the outage:
+   ```bash
+   az containerapp update \
+     --name <secondary_app_name> \
+     --resource-group <secondary_rg> \
+     --min-replicas 1
+   ```
+
+---
+
+### Runbook: Scenario G — ACR unavailability
+
+**Impact:** Existing replicas continue running normally. The problem surfaces only when new replicas need to be started (scale-out, restart, or revision deployment). New replicas fail to pull the image and enter a `Waiting` state.
+
+**Detection:**
+```bash
+# Check for replicas stuck in Waiting/Failed state
+az containerapp replica list \
+  --name <app_name> \
+  --resource-group <rg> \
+  --query "[?properties.runningState!='Running'].{name:name, state:properties.runningState}" \
+  -o table
+
+# Check system logs for image pull errors
+az containerapp logs show \
+  --name <app_name> \
+  --resource-group <rg> \
+  --type system \
+  --follow
+```
+
+**Recovery options:**
+
+| Option | When to use | Steps |
+| --- | --- | --- |
+| Wait for ACR to recover | Short outage expected | Monitor ACR health; replicas will pull successfully once ACR recovers |
+| ACR geo-replication | Already configured | No action — ACR Traffic Manager fails over to secondary replica automatically |
+| Push image to secondary ACR | Second ACR exists in another region | Update Container App to reference secondary ACR; `az containerapp update --image <secondary_acr>/<image>:<tag>` |
+
+> **Prevention:** Upgrade ACR to Premium and enable geo-replication in the secondary region. Cost: ~$35/month additional over Basic ACR.
+
+---
+
+## 7. Permissions
 
 ### Who needs what access
 
@@ -866,7 +1232,7 @@ az role assignment list \
 
 ---
 
-## 7. Quick Reference Commands
+## 8. Quick Reference Commands
 
 ```bash
 # Get the app's public URL (FQDN)

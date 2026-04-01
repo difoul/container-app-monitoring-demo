@@ -1,6 +1,7 @@
 import os
 from fastapi import FastAPI
-from app.routers import load, errors, latency, scaling
+from fastapi.responses import JSONResponse
+from app.routers import load, errors, latency, scaling, dr
 
 _connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
 
@@ -18,6 +19,7 @@ app.include_router(load.router)
 app.include_router(errors.router)
 app.include_router(latency.router)
 app.include_router(scaling.router)
+app.include_router(dr.router)
 
 if _connection_string:
     from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -26,6 +28,8 @@ if _connection_string:
 
 @app.get("/health", tags=["health"])
 def health():
+    if dr._degraded:
+        return JSONResponse(status_code=503, content={"status": "degraded"})
     return {"status": "ok"}
 
 
@@ -40,6 +44,10 @@ def root():
             "latency": "GET /latency?ms=2000",
             "burst": "GET /burst?requests=100",
             "health": "GET /health",
+            "dr_region": "GET /dr/region",
+            "dr_status": "GET /dr/status",
+            "dr_degrade": "POST /dr/degrade",
+            "dr_recover": "POST /dr/recover",
             "docs": "GET /docs",
         },
     }
