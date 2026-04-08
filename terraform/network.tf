@@ -6,6 +6,14 @@ resource "azurerm_virtual_network" "main" {
   tags                = local.common_tags
 }
 
+# /27 — 32 addresses, sufficient for all AMPLS private endpoint NICs
+resource "azurerm_subnet" "private_endpoints" {
+  name                 = "snet-private-endpoints"
+  resource_group_name  = azurerm_resource_group.main.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = ["10.0.2.0/27"]
+}
+
 # /23 is the minimum block required by Azure for zone-redundant Container Apps Environments
 resource "azurerm_subnet" "container_apps" {
   name                 = "snet-container-apps"

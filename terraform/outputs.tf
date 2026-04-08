@@ -34,7 +34,15 @@ output "application_insights_connection_string" {
 }
 
 output "log_analytics_workspace_id" {
-  value = azurerm_log_analytics_workspace.main.workspace_id
+  value = module.law.workspace_customer_id
+}
+
+output "ampls_id" {
+  value = module.law.ampls_id
+}
+
+output "law_security_mode" {
+  value = module.law.security_mode
 }
 
 output "workbook_id" {

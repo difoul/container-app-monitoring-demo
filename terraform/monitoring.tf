@@ -11,7 +11,7 @@
 resource "azurerm_monitor_diagnostic_setting" "container_app_env" {
   name                           = "diag-cae-monitoring-demo"
   target_resource_id             = azurerm_container_app_environment.main.id
-  log_analytics_workspace_id     = azurerm_log_analytics_workspace.main.id
+  log_analytics_workspace_id     = module.law.workspace_id
   log_analytics_destination_type = "Dedicated"
 
   enabled_log {
@@ -26,7 +26,7 @@ resource "azurerm_monitor_diagnostic_setting" "container_app_env" {
 resource "azurerm_monitor_diagnostic_setting" "container_app" {
   name                           = "diag-ca-monitoring-demo"
   target_resource_id             = azurerm_container_app.main.id
-  log_analytics_workspace_id     = azurerm_log_analytics_workspace.main.id
+  log_analytics_workspace_id     = module.law.workspace_id
   log_analytics_destination_type = "Dedicated"
 
   enabled_metric {
@@ -36,20 +36,33 @@ resource "azurerm_monitor_diagnostic_setting" "container_app" {
 
 # ── Observability Resources ───────────────────────────────────────────────────
 
-resource "azurerm_log_analytics_workspace" "main" {
-  name                = "law-monitoring-demo"
+# Hybrid mode: private ingestion (AMPLS + private endpoint) with public query.
+# Analysts can query from the Azure portal without VPN; the data pipeline is
+# fully protected — nothing can be injected from outside the VNet.
+module "law" {
+  source = "./modules/law-secure"
+
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
-  sku                 = "PerGB2018"
-  retention_in_days   = 30
-  tags                = local.common_tags
+  workspace_name      = "law-monitoring-demo"
+  security_mode       = "hybrid"
+
+  retention_in_days = 30
+  daily_quota_gb    = -1
+
+  subnet_id          = azurerm_subnet.private_endpoints.id
+  virtual_network_id = azurerm_virtual_network.main.id
+
+  enable_audit_diagnostics = true
+
+  tags = local.common_tags
 }
 
 resource "azurerm_application_insights" "main" {
   name                = "appi-monitoring-demo"
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
-  workspace_id        = azurerm_log_analytics_workspace.main.id
+  workspace_id        = module.law.workspace_id
   application_type    = "web"
   tags                = local.common_tags
 }
