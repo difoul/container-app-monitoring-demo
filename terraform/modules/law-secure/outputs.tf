@@ -24,6 +24,11 @@ output "ampls_id" {
   value       = local.create_private_link ? azurerm_monitor_private_link_scope.this[0].id : null
 }
 
+output "ampls_name" {
+  description = "Name of the Azure Monitor Private Link Scope. Null when security_mode is 'open'."
+  value       = local.create_private_link ? azurerm_monitor_private_link_scope.this[0].name : null
+}
+
 output "private_endpoint_id" {
   description = "Resource ID of the AMPLS private endpoint. Null when security_mode is 'open'."
   value       = local.create_private_link ? azurerm_private_endpoint.ampls[0].id : null

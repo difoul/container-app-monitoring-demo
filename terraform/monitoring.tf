@@ -66,3 +66,15 @@ resource "azurerm_application_insights" "main" {
   application_type    = "web"
   tags                = local.common_tags
 }
+
+# App Insights must be explicitly scoped to the AMPLS — without this, the
+# Container App (running inside the VNet) cannot reach the App Insights
+# ingestion endpoint when AMPLS ingestion_access_mode = "PrivateOnly".
+resource "azurerm_monitor_private_link_scoped_service" "app_insights" {
+  count = module.law.ampls_name != null ? 1 : 0
+
+  name                = "scoped-appi-monitoring-demo"
+  resource_group_name = azurerm_resource_group.main.name
+  scope_name          = module.law.ampls_name
+  linked_resource_id  = azurerm_application_insights.main.id
+}
