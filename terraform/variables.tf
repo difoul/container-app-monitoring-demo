@@ -25,6 +25,11 @@ variable "container_image" {
   description = "Full image reference to deploy. Defaults to a public placeholder for the initial apply. Set to '<acr_login_server>/<container_app_name>:<tag>' after pushing to ACR."
   type        = string
   default     = "mcr.microsoft.com/k8se/quickstart:latest"
+
+  validation {
+    condition     = var.container_image != "mcr.microsoft.com/k8se/quickstart:latest"
+    error_message = "container_image is still set to the placeholder. Set it to your ACR image reference, e.g. '<acr_login_server>/monitoring-demo:latest'."
+  }
 }
 
 variable "alert_email" {

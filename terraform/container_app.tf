@@ -62,6 +62,7 @@ resource "azurerm_container_app" "main" {
 
         initial_delay           = 5
         interval_seconds        = 10
+        timeout                 = 5
         failure_count_threshold = 3
       }
 
@@ -71,6 +72,7 @@ resource "azurerm_container_app" "main" {
         port      = 8000
 
         interval_seconds        = 10
+        timeout                 = 5
         failure_count_threshold = 3
         success_count_threshold = 1
       }

@@ -30,6 +30,8 @@ if _connection_string:
 def health():
     if dr._degraded:
         return JSONResponse(status_code=503, content={"status": "degraded"})
+    if not _connection_string:
+        return JSONResponse(status_code=503, content={"status": "unconfigured", "detail": "APPLICATIONINSIGHTS_CONNECTION_STRING is not set — telemetry is disabled"})
     return {"status": "ok"}
 
 

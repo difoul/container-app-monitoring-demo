@@ -17,7 +17,7 @@ _DESCRIPTIONS = {
 
 @router.get("/{code}")
 def return_error(
-    code: int = Path(description="HTTP status code to return (e.g. 500, 404, 429)"),
+    code: int = Path(description="HTTP status code to return (e.g. 500, 404, 429)", ge=400, le=599),
 ):
     """Return the requested HTTP error code with a descriptive message."""
     description = _DESCRIPTIONS.get(code, "Error")
