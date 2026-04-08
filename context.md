@@ -9,7 +9,7 @@ Provide a reference example for users on how to operate Azure Container Apps in 
 # Output
 
 A Docker image deployed to Azure Container App via Terraform, covering:
-- Monitoring and observability (App Insights + Log Analytics)
+- Monitoring and observability (App Insights + Log Analytics via AMPLS hybrid mode)
 - Alerting (metric-based alerts + activity log alerts via Azure Monitor)
 - High availability (zone redundancy, min replicas, health probes)
 - Backup and recovery (deletion alerts + recovery runbook)
@@ -36,50 +36,56 @@ The application exposes public endpoints to generate load, errors, latency, and 
 | Resource | Notes |
 |---|---|
 | Resource Group | `rg-monitoring-demo` |
-| VNet + Subnet | `vnet-monitoring-demo`, `/23` delegated to `Microsoft.App/environments` |
-| ACR | Basic, admin enabled |
-| Log Analytics Workspace | 30-day retention |
-| Application Insights | Workspace-based, linked to LAW |
-| Container Apps Environment | Zone-redundant, VNet-integrated, `prevent_destroy` commented out, `ignore_changes=[infrastructure_subnet_id, infrastructure_resource_group_name, workload_profile]` |
+| VNet | `vnet-monitoring-demo`, `10.0.0.0/16` |
+| Subnet — Container Apps | `snet-container-apps`, `10.0.0.0/23`, delegated to `Microsoft.App/environments` |
+| Subnet — Private Endpoints | `snet-private-endpoints`, `10.0.2.0/27`, for AMPLS private endpoint NIC |
+| ACR | Basic, admin enabled (acceptable for demo; use managed identity in prod) |
+| Log Analytics Workspace | Via `law-secure` module, hybrid mode — 30-day retention, private ingestion via AMPLS, public query |
+| AMPLS | Azure Monitor Private Link Scope — blocks public data ingestion |
+| Private Endpoint | Connects VNet to AMPLS on `snet-private-endpoints` |
+| Private DNS Zones (×5) | `*.oms`, `*.ods`, `*.agentsvc`, `*.monitor`, `*.blob` — linked to VNet |
+| Application Insights | Workspace-based, linked to LAW via `module.law.workspace_id` |
+| Container Apps Environment | Zone-redundant, VNet-integrated, `logs_destination = "azure-monitor"`, `ignore_changes=[infrastructure_resource_group_name, workload_profile]` |
+| Diagnostic Setting — Env | `allLogs` + `AllMetrics` → LAW, `Dedicated` mode (resource-specific tables) |
+| Diagnostic Setting — App | `AllMetrics` only → LAW, `Dedicated` mode (log categories not supported at app level) |
 | Container App | 0.5 vCPU / 1Gi, min 2 / max 5 replicas, HTTP scaling, liveness + readiness probes on `/health:8000` |
 | Metric Alerts | CPU Maximum >400M nanocores, Memory Average >858MB, HTTP 5xx Count >10, RestartCount Total >0 |
 | Activity Log Alerts | Container App deleted, Container Apps Environment deleted |
-| Availability Web Test | Pings `/health` from 5 Azure regions every 5 min; alert fires when < 100% pass |
-| Azure Monitor Workbook | `dashboard.tf` — resource-picker-based, 6 metric charts (CPU, Memory, Replicas, Restarts, HTTP failures, Availability) |
+| Availability Web Test | Pings `/health` from 5 Azure regions every 5 min |
+| Availability Alert | Uses `application_insights_web_test_location_availability_criteria`, `failed_location_count = 1` |
+| Azure Monitor Workbook | `dashboard.tf` — resource-picker-based, 6 metric charts (CPU, Memory, Replicas, Restarts, HTTP failures, Availability), UUID from `random_uuid` |
+| Common Tags | `environment=demo`, `project=container-app-monitoring`, `managed-by=terraform` on all resources |
 
 # Status
 
 ## Done
 - FastAPI app with all endpoints (load, errors, latency, scaling, DR)
 - App Insights telemetry (OpenTelemetry + explicit FastAPIInstrumentor)
-- Autoscaling tested with `hey`
-- HTTP 5xx alert validated
-- HA: zone redundancy + VNet + min_replicas=2 + health probes — applied and verified
-- Environment: `prevent_destroy` commented out (was blocking `terraform destroy`); `ignore_changes` on subnet/RG/workload_profile prevents drift
-- Backup and recovery: Activity Log alerts for deletion detection + full recovery runbook in docs
-- Availability web test (5 regions) + availability metric alert (severity 0)
-- Azure Monitor Workbook deployed (`terraform/dashboard.tf`)
-- Operations user guide created (`docs/operations.md`) — generic, Confluence-ready
-- DR simulation feature: `app/routers/dr.py` + updated `app/main.py` + DR section in `docs/operations.md`
-- Skills converted to SKILL.md format: `~/.claude/plugins/marketplaces/local-skills/skills/az-ops-plan/` and `az-ops-build/` (updated with azurerm v4, workload profiles v2, managed identity for ACR, Key Vault secret refs, KEDA managed identity, Grafana/AMW options)
+- Terraform review: tags on all resources, random_uuid for workbook, availability alert uses web-test criteria, `logs_destination` explicit, `infrastructure_subnet_id` removed from `ignore_changes`
+- Switched from direct `log-analytics` to `azure-monitor` + diagnostic settings (Dedicated mode)
+- `law-secure` module integrated in hybrid mode (AMPLS + private endpoint + 5 DNS zones + self-audit diagnostics)
+- Infrastructure applied and verified — app running at `gbe123456789.salmonsky-9bbde29b.swedencentral.azurecontainerapps.io`
+- Image pushed to ACR (`acrmonitoringdemo.azurecr.io/monitoring-demo:latest`), health check returns `{"status":"ok"}`
+- `docs/operations.md` updated to reflect: law-secure module, azure-monitor diagnostic settings, web-test availability alert criteria
 
-## Uncommitted changes (need commit)
-- `app/main.py` — dr router import + /health 503 logic (staged)
-- `app/routers/dr.py` — DR simulation endpoints (untracked)
-- `docs/operations.md` — DR section added (unstaged)
+## In progress
+Nothing — infrastructure is deployed, app is running, tests can be executed.
 
 ## Pending
-- Commit DR feature changes
+- Run load/alert validation tests against the deployed app
 - Terraform for second region + Azure Front Door (user to decide)
-- Re-enable `prevent_destroy=true` on Container Apps Environment when redeploying to production
+- Re-enable `prevent_destroy=true` on Container Apps Environment when moving to production
 
 ## Known issues / decisions
-- `prevent_destroy=true` commented out on Container Apps Environment — was preventing `terraform destroy` during testing; re-enable before production deployment
-- Workbook resource pickers require `queryType=1`, `resourceType="microsoft.resourcegraph/resources"`, `crossComponentResources=["{Subscription}"]`, query starting with `where type == '...'` — `typeSettings.resourceTypeFilter` alone does NOT populate dropdowns
-- Container Apps Environment LAW linkage cannot be changed after creation
-- `FastAPIInstrumentor.instrument_app(app)` must be called explicitly after `app = FastAPI()` — `configure_azure_monitor()` auto-instrumentation alone does not attach to FastAPI
+- `prevent_destroy=true` commented out on Container Apps Environment — re-enable before production deployment
+- Container app deployed as `gbe123456789` (Azure-generated name) — `var.container_app_name = "monitoring-demo"` was not used; check tfvars
+- `ME_cae-monitoring-demo_rg-monitoring-demo_swedencentral` resource group is Azure-managed (expected) — contains the load balancer and public IP for external ingress; do not delete
+- `logs_destination` on Container Apps Environment is a creation-time setting — changing it requires destroy + recreate
+- `log_analytics_workspace_id` on the environment is incompatible with `logs_destination = "azure-monitor"` — must not be set together
+- Log categories (`ContainerAppConsoleLogs`, `ContainerAppSystemLogs`) are only configurable at environment level, not container app level
+- Workbook resource pickers require `queryType=1`, `resourceType="microsoft.resourcegraph/resources"`, `crossComponentResources=["{Subscription}"]`, query starting with `where type == '...'`
+- `FastAPIInstrumentor.instrument_app(app)` must be called explicitly after `app = FastAPI()` — `configure_azure_monitor()` alone does not attach to FastAPI
 - DR endpoints require `REGION_NAME` and `INSTANCE_ROLE` env vars per deployment
-- Infrastructure was destroyed 2026-03-27 after testing; Terraform state is clean
 
 ## Last updated
-2026-04-02
+2026-04-08

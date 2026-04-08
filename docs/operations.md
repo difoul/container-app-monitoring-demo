@@ -26,26 +26,51 @@ Before any monitoring, alerting, or log querying works, you must provision the r
 
 | Resource | Purpose | Terraform type |
 | --- | --- | --- |
-| Log Analytics Workspace | Receives container stdout/stderr and system logs; query target for KQL | `azurerm_log_analytics_workspace` |
+| Log Analytics Workspace | Receives container stdout/stderr and system logs; query target for KQL | `azurerm_log_analytics_workspace` (via `law-secure` module) |
 | Application Insights | Collects application-level telemetry (requests, exceptions, traces, dependencies) | `azurerm_application_insights` |
+| AMPLS + Private Endpoint | Secures log ingestion — only traffic from within the VNet reaches the workspace | provisioned by `law-secure` module |
+| Private DNS Zones (×5) | Correct DNS resolution for `*.oms`, `*.ods`, `*.agentsvc`, `*.monitor`, `*.blob` from within the VNet | provisioned by `law-secure` module |
 
 > **Important:** Application Insights must be **workspace-based** — link it to the Log Analytics Workspace at creation time via the `workspace_id` property. Classic (non-workspace) Application Insights is deprecated and cannot be linked.
 
+> **Production recommendation:** Use the `law-secure` module in **hybrid** mode. This provisions an Azure Monitor Private Link Scope (AMPLS) that blocks public data ingestion while keeping query access public — analysts can use the Azure portal without VPN. Direct `log-analytics` destination mode does not support Private Link.
+
 ```hcl
-resource "azurerm_log_analytics_workspace" "main" {
-  name                = "law-<prefix>"
+# Dedicated subnet for AMPLS private endpoint — cannot share the Container Apps subnet
+resource "azurerm_subnet" "private_endpoints" {
+  name                 = "snet-private-endpoints"
+  resource_group_name  = azurerm_resource_group.main.name
+  virtual_network_name = azurerm_virtual_network.main.name
+  address_prefixes     = ["10.0.2.0/27"]
+}
+
+# law-secure module: LAW + AMPLS + private endpoint + 5 private DNS zones + self-audit diagnostics
+module "law" {
+  source = "./modules/law-secure"
+
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
-  sku                 = "PerGB2018"
-  retention_in_days   = 30
+  workspace_name      = "law-<prefix>"
+  security_mode       = "hybrid"   # private ingestion, public query
+
+  retention_in_days = 30
+  daily_quota_gb    = -1           # unlimited; set a value in production to cap costs
+
+  subnet_id          = azurerm_subnet.private_endpoints.id
+  virtual_network_id = azurerm_virtual_network.main.id
+
+  enable_audit_diagnostics = true  # captures LAQueryLogs + SummaryLogs for compliance
+
+  tags = local.common_tags
 }
 
 resource "azurerm_application_insights" "main" {
   name                = "appi-<prefix>"
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
-  workspace_id        = azurerm_log_analytics_workspace.main.id
+  workspace_id        = module.law.workspace_id
   application_type    = "web"
+  tags                = local.common_tags
 }
 ```
 
@@ -53,20 +78,62 @@ resource "azurerm_application_insights" "main" {
 
 ### Required service configuration
 
-#### Container Apps Environment — link to Log Analytics
+#### Container Apps Environment — log routing via Azure Monitor + Diagnostic Settings
 
-The Container Apps Environment must be linked to the Log Analytics Workspace. This enables container stdout/stderr and system event logs to flow to the workspace automatically.
+Set `logs_destination = "azure-monitor"` on the environment and create explicit diagnostic settings to route logs to the workspace. This is the production-recommended approach because it supports Private Link, allows up to 5 destinations (Log Analytics, Event Hub, storage, partner solutions), and uses resource-specific tables (`Dedicated` mode) instead of the legacy `AzureDiagnostics` table.
+
+> **Important:** `logs_destination` can only be set at environment creation time — changing it later requires destroying and recreating the environment.
+
+> **Do not** use `log_analytics_workspace_id` on the environment when `logs_destination = "azure-monitor"` — the two are mutually exclusive per the provider.
 
 ```hcl
 resource "azurerm_container_app_environment" "main" {
-  name                       = "cae-<prefix>"
-  resource_group_name        = azurerm_resource_group.main.name
-  location                   = azurerm_resource_group.main.location
-  log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
+  name                     = "cae-<prefix>"
+  resource_group_name      = azurerm_resource_group.main.name
+  location                 = azurerm_resource_group.main.location
+  logs_destination         = "azure-monitor"
+  infrastructure_subnet_id = azurerm_subnet.container_apps.id
+  zone_redundancy_enabled  = true
+  tags                     = local.common_tags
+
+  lifecycle {
+    ignore_changes = [
+      infrastructure_resource_group_name,
+      workload_profile,
+    ]
+  }
+}
+
+# Environment level: console logs + system logs + metrics → resource-specific tables
+resource "azurerm_monitor_diagnostic_setting" "container_app_env" {
+  name                           = "diag-cae-<prefix>"
+  target_resource_id             = azurerm_container_app_environment.main.id
+  log_analytics_workspace_id     = module.law.workspace_id
+  log_analytics_destination_type = "Dedicated"   # resource-specific tables, not AzureDiagnostics
+
+  enabled_log {
+    category_group = "allLogs"   # ContainerAppConsoleLogs + ContainerAppSystemLogs
+  }
+
+  enabled_metric {
+    category = "AllMetrics"
+  }
+}
+
+# Container app level: metrics only (log categories are not supported at app level)
+resource "azurerm_monitor_diagnostic_setting" "container_app" {
+  name                           = "diag-ca-<prefix>"
+  target_resource_id             = azurerm_container_app.main.id
+  log_analytics_workspace_id     = module.law.workspace_id
+  log_analytics_destination_type = "Dedicated"
+
+  enabled_metric {
+    category = "AllMetrics"
+  }
 }
 ```
 
-> **Note:** This linkage is set at environment creation and cannot be changed afterwards. If you skip it, container logs will not appear in Log Analytics and KQL queries against `ContainerAppSystemLogs_CL` will return no results.
+> **Note:** Log categories (`ContainerAppConsoleLogs`, `ContainerAppSystemLogs`) are only configurable at the **environment** level. The container app–level diagnostic setting supports **metrics only**. Up to 5 diagnostic settings can be created per resource to fan out to additional destinations.
 
 #### Container App — Application Insights connection string
 
@@ -366,24 +433,28 @@ resource "azurerm_monitor_action_group" "email" {
 }
 ```
 
-#### Availability alert (scoped to App Insights)
+#### Availability alert (web-test–specific criteria)
+
+Use `application_insights_web_test_location_availability_criteria` instead of a generic `criteria` block. This is the correct resource type for web test alerts — it lets you alert on a failed location count rather than a percentage, and requires both the App Insights resource and the web test in `scopes`.
 
 ```hcl
 resource "azurerm_monitor_metric_alert" "availability" {
   name                = "alert-availability-down"
   resource_group_name = azurerm_resource_group.main.name
-  scopes              = [azurerm_application_insights.main.id]
-  description         = "Availability dropped below 100%"
-  severity            = 0
-  frequency           = "PT1M"
-  window_size         = "PT5M"
+  scopes = [
+    azurerm_application_insights.main.id,
+    azurerm_application_insights_standard_web_test.health.id,
+  ]
+  description = "Availability check failing from at least one region"
+  severity    = 0
+  frequency   = "PT1M"
+  window_size = "PT5M"
+  tags        = local.common_tags
 
-  criteria {
-    metric_namespace = "microsoft.insights/components"
-    metric_name      = "availabilityResults/availabilityPercentage"
-    aggregation      = "Average"
-    operator         = "LessThan"
-    threshold        = 100
+  application_insights_web_test_location_availability_criteria {
+    web_test_id           = azurerm_application_insights_standard_web_test.health.id
+    component_id          = azurerm_application_insights.main.id
+    failed_location_count = 1
   }
 
   action {
@@ -391,6 +462,8 @@ resource "azurerm_monitor_metric_alert" "availability" {
   }
 }
 ```
+
+> **Note:** Using a generic `criteria` block with `availabilityResults/availabilityPercentage` works, but `application_insights_web_test_location_availability_criteria` is the semantically correct approach for web test alerts. It expresses intent clearly and supports `failed_location_count` for region-level precision.
 
 #### HTTP 5xx spike alert
 
