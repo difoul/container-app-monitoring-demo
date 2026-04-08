@@ -2,6 +2,7 @@ resource "azurerm_monitor_action_group" "email" {
   name                = "ag-monitoring-demo"
   resource_group_name = azurerm_resource_group.main.name
   short_name          = "monitoringdm"
+  tags                = local.common_tags
 
   email_receiver {
     name          = "alert-email"
@@ -18,6 +19,7 @@ resource "azurerm_monitor_metric_alert" "cpu" {
   severity            = 2
   frequency           = "PT1M"
   window_size         = "PT5M"
+  tags                = local.common_tags
 
   criteria {
     metric_namespace = "Microsoft.App/containerApps"
@@ -41,6 +43,7 @@ resource "azurerm_monitor_metric_alert" "memory" {
   severity            = 2
   frequency           = "PT1M"
   window_size         = "PT5M"
+  tags                = local.common_tags
 
   criteria {
     metric_namespace = "Microsoft.App/containerApps"
@@ -64,6 +67,7 @@ resource "azurerm_monitor_metric_alert" "http_5xx" {
   severity            = 1
   frequency           = "PT1M"
   window_size         = "PT5M"
+  tags                = local.common_tags
 
   criteria {
     metric_namespace = "microsoft.insights/components"
@@ -85,6 +89,7 @@ resource "azurerm_monitor_activity_log_alert" "container_app_deleted" {
   location            = "Global"
   scopes              = [azurerm_resource_group.main.id]
   description         = "Container App or Container Apps Environment was deleted — trigger recovery runbook"
+  tags                = local.common_tags
 
   criteria {
     category       = "Administrative"
@@ -103,6 +108,7 @@ resource "azurerm_monitor_activity_log_alert" "environment_deleted" {
   location            = "Global"
   scopes              = [azurerm_resource_group.main.id]
   description         = "Container Apps Environment was deleted — full stack recovery required"
+  tags                = local.common_tags
 
   criteria {
     category       = "Administrative"
@@ -122,6 +128,7 @@ resource "azurerm_application_insights_standard_web_test" "health" {
   location                = azurerm_resource_group.main.location
   application_insights_id = azurerm_application_insights.main.id
   frequency               = 300 # every 5 minutes
+  tags                    = local.common_tags
 
   geo_locations = [
     "us-va-ash-azr",   # East US
@@ -136,23 +143,21 @@ resource "azurerm_application_insights_standard_web_test" "health" {
   }
 }
 
-# Alert when availability drops below 100% — app is unreachable from at least one region
-# Scoped to App Insights only — availabilityResults metrics are queryable via microsoft.insights/components
+# Alert when availability fails from at least 1 region — uses the web-test-specific criteria block
 resource "azurerm_monitor_metric_alert" "availability" {
   name                = "alert-availability"
   resource_group_name = azurerm_resource_group.main.name
-  scopes              = [azurerm_application_insights.main.id]
+  scopes              = [azurerm_application_insights.main.id, azurerm_application_insights_standard_web_test.health.id]
   description         = "Container App /health endpoint is failing availability checks from at least one region"
   severity            = 0 # Critical
   frequency           = "PT1M"
   window_size         = "PT5M"
+  tags                = local.common_tags
 
-  criteria {
-    metric_namespace = "microsoft.insights/components"
-    metric_name      = "availabilityResults/availabilityPercentage"
-    aggregation      = "Average"
-    operator         = "LessThan"
-    threshold        = 100
+  application_insights_web_test_location_availability_criteria {
+    web_test_id           = azurerm_application_insights_standard_web_test.health.id
+    component_id          = azurerm_application_insights.main.id
+    failed_location_count = 1
   }
 
   action {
@@ -169,6 +174,7 @@ resource "azurerm_monitor_metric_alert" "restarts" {
   severity            = 1
   frequency           = "PT1M"
   window_size         = "PT5M"
+  tags                = local.common_tags
 
   criteria {
     metric_namespace = "Microsoft.App/containerApps"

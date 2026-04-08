@@ -4,4 +4,5 @@ resource "azurerm_container_registry" "main" {
   location            = azurerm_resource_group.main.location
   sku                 = "Basic"
   admin_enabled       = true
+  tags                = local.common_tags
 }

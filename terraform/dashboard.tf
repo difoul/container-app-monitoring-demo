@@ -1,11 +1,14 @@
+resource "random_uuid" "workbook" {}
+
 # Azure Monitor Workbook with resource pickers — works for any Container App deployment.
 # Open it at: Monitor → Workbooks → "Container App Monitoring"
 resource "azurerm_application_insights_workbook" "main" {
-  name                = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+  name                = random_uuid.workbook.result
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
   display_name        = "Container App Monitoring"
   source_id           = "azure monitor"
+  tags                = local.common_tags
 
   data_json = jsonencode({
     version = "Notebook/1.0"

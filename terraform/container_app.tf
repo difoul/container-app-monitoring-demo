@@ -2,14 +2,15 @@ resource "azurerm_container_app_environment" "main" {
   name                       = "cae-monitoring-demo"
   resource_group_name        = azurerm_resource_group.main.name
   location                   = azurerm_resource_group.main.location
+  logs_destination           = "log-analytics"
   log_analytics_workspace_id = azurerm_log_analytics_workspace.main.id
   infrastructure_subnet_id   = azurerm_subnet.container_apps.id
   zone_redundancy_enabled    = true
+  tags                       = local.common_tags
 
   lifecycle {
     #prevent_destroy = true
     ignore_changes = [
-      infrastructure_subnet_id,
       # Azure auto-creates a managed resource group (ME_...) — normalizes after first apply
       infrastructure_resource_group_name,
       # Azure injects a default Consumption workload profile not declared in Terraform
@@ -91,4 +92,6 @@ resource "azurerm_container_app" "main" {
       latest_revision = true
     }
   }
+
+  tags = local.common_tags
 }
