@@ -171,8 +171,11 @@ resource "azurerm_application_insights_standard_web_test" "health" {
   ]
 
   request {
-    url                  = "https://${azurerm_container_app.main.latest_revision_fqdn}/health"
-    expected_http_status = 200
+    url = "https://${azurerm_container_app.main.ingress[0].fqdn}/health"
+  }
+
+  validation_rules {
+    expected_status_code = 200
   }
 }
 
