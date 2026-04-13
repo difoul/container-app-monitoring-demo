@@ -397,7 +397,8 @@ Set up the following alerts to cover the most common failure modes. Thresholds i
 | Availability down | App Insights | `availabilityResults/availabilityPercentage` Average | < 100% | 0 — Critical |
 | HTTP 5xx spike | App Insights | `requests/failed` Count | > 10 in 5 min | 1 — Error |
 | Container restarting | Container App | `RestartCount` Total | > 0 | 1 — Error |
-| CPU high | Container App | `UsageNanoCores` Maximum | > 80% of allocation | 2 — Warning |
+| CPU spike | Container App | `UsageNanoCores` Maximum | > 80% of allocation (5 min window) | 2 — Warning |
+| CPU sustained | Container App | `UsageNanoCores` Average | > 70% of allocation (15 min window) | 3 — Informational |
 | Memory high | Container App | `WorkingSetBytes` Average | > 80% of allocation | 2 — Warning |
 | App deleted | Activity Log | `Microsoft.App/containerApps/delete` | Any deletion | — |
 | Environment deleted | Activity Log | `Microsoft.App/managedEnvironments/delete` | Any deletion | — |
@@ -527,15 +528,17 @@ resource "azurerm_monitor_metric_alert" "restarts" {
 }
 ```
 
-#### CPU high alert
+#### CPU alerts — spike and sustained
+
+Two complementary alerts cover different failure modes: a spike alert catches sudden bursts; a sustained alert catches gradual saturation that never peaks high enough to fire the spike alert.
 
 ```hcl
-# Threshold: 80% of 0.5 vCPU = 400,000,000 nanocores. Scale proportionally.
+# Spike: Maximum > 80% of 0.5 vCPU = 400,000,000 nanocores over 5 minutes
 resource "azurerm_monitor_metric_alert" "cpu_high" {
   name                = "alert-cpu-high"
   resource_group_name = azurerm_resource_group.main.name
   scopes              = [azurerm_container_app.main.id]
-  description         = "CPU exceeded 80% of allocation"
+  description         = "Container App CPU usage above 80% of allocated 0.5 vCPU"
   severity            = 2
   frequency           = "PT1M"
   window_size         = "PT5M"
@@ -546,6 +549,29 @@ resource "azurerm_monitor_metric_alert" "cpu_high" {
     aggregation      = "Maximum"
     operator         = "GreaterThan"
     threshold        = 400000000
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
+# Sustained: Average > 70% of 0.5 vCPU = 350,000,000 nanocores over 15 minutes
+resource "azurerm_monitor_metric_alert" "cpu_sustained" {
+  name                = "alert-cpu-sustained"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = [azurerm_container_app.main.id]
+  description         = "Container App CPU average above 70% of allocated 0.5 vCPU for 15 minutes — consider scaling up"
+  severity            = 3
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+
+  criteria {
+    metric_namespace = "Microsoft.App/containerApps"
+    metric_name      = "UsageNanoCores"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = 350000000
   }
 
   action {
@@ -677,9 +703,11 @@ Azure Container Apps supports several scaling triggers. Pick the one that matche
 #### Terraform example — HTTP rule
 
 ```hcl
+# concurrent_requests is exposed as var.http_scale_threshold (default 10, range 1–1000).
+# Lower values scale out earlier; higher values pack more traffic per replica.
 http_scale_rule {
   name                = "http-scaling"
-  concurrent_requests = "10"
+  concurrent_requests = tostring(var.http_scale_threshold)
 }
 ```
 
