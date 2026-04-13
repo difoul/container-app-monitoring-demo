@@ -34,6 +34,31 @@ resource "azurerm_monitor_metric_alert" "cpu" {
   }
 }
 
+# CPU sustained > 70% of 0.5 vCPU allocation (350,000,000 nanocores) over 15 minutes
+# Complements the spike alert above — catches gradual saturation before it becomes critical
+resource "azurerm_monitor_metric_alert" "cpu_sustained" {
+  name                = "alert-cpu-sustained"
+  resource_group_name = azurerm_resource_group.main.name
+  scopes              = [azurerm_container_app.main.id]
+  description         = "Container App CPU average above 70% of allocated 0.5 vCPU for 15 minutes — consider scaling up"
+  severity            = 3 # Informational — early warning before spike alert fires
+  frequency           = "PT5M"
+  window_size         = "PT15M"
+  tags                = local.common_tags
+
+  criteria {
+    metric_namespace = "Microsoft.App/containerApps"
+    metric_name      = "UsageNanoCores"
+    aggregation      = "Average"
+    operator         = "GreaterThan"
+    threshold        = 350000000
+  }
+
+  action {
+    action_group_id = azurerm_monitor_action_group.email.id
+  }
+}
+
 # Memory > 80% of 1Gi allocation (858,993,459 bytes)
 resource "azurerm_monitor_metric_alert" "memory" {
   name                = "alert-memory-high"
@@ -139,7 +164,8 @@ resource "azurerm_application_insights_standard_web_test" "health" {
   ]
 
   request {
-    url = "https://${azurerm_container_app.main.latest_revision_fqdn}/health"
+    url                  = "https://${azurerm_container_app.main.latest_revision_fqdn}/health"
+    expected_http_status = 200
   }
 }
 

@@ -15,6 +15,13 @@ pip install -r requirements.txt
 uvicorn app.main:app --reload         # dev server at http://localhost:8000
 ```
 
+**Updating dependencies** (`requirements.txt.lock` is the pinned lockfile):
+```bash
+pip install pip-tools
+pip-compile requirements.txt --output-file requirements.txt.lock --strip-extras
+# Commit both requirements.txt (direct deps) and requirements.txt.lock (full pin)
+```
+
 **Docker:**
 ```bash
 docker build --platform linux/amd64 -t monitoring-demo .

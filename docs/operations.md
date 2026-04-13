@@ -72,7 +72,19 @@ resource "azurerm_application_insights" "main" {
   application_type    = "web"
   tags                = local.common_tags
 }
+
+# CRITICAL: scope App Insights to AMPLS — without this, ingestion is silently blocked
+# when ingestion_access_mode = "PrivateOnly". The law-secure module only scopes LAW by
+# default; App Insights must be added separately.
+resource "azurerm_monitor_private_link_scoped_service" "app_insights" {
+  name                = "amplsss-appi-<prefix>"
+  resource_group_name = azurerm_resource_group.main.name
+  scope_name          = module.law.ampls_name   # requires ampls_name output from law-secure
+  linked_resource_id  = azurerm_application_insights.main.id
+}
 ```
+
+> **Critical — AMPLS scope must include App Insights:** When `ingestion_access_mode = "PrivateOnly"`, Azure Monitor blocks ingestion from the VNet for **any** resource not explicitly linked to the AMPLS. The `law-secure` module scopes the Log Analytics Workspace automatically, but **Application Insights is a separate resource** and must be linked via `azurerm_monitor_private_link_scoped_service`. Omitting this causes all application telemetry (traces, requests, exceptions) to be silently dropped — the SDK reports no errors, the container runs normally, and there is nothing in the Azure portal to indicate the problem. Verify both resources appear under **AMPLS → Azure Monitor Resources** in the portal after `terraform apply`.
 
 ---
 
@@ -176,6 +188,8 @@ useAzureMonitor(); // reads APPLICATIONINSIGHTS_CONNECTION_STRING from env
 ```
 
 > **Note:** Without this configuration, `requests/failed`, `availabilityResults/availabilityPercentage`, and all App Insights-based alerts will have no data.
+
+> **Warning:** Telemetry is silently disabled if `APPLICATIONINSIGHTS_CONNECTION_STRING` is not set at runtime. The application will start and serve traffic normally — there is no error or crash — but no traces, requests, exceptions, or custom metrics will reach Application Insights. The `/health` endpoint in this demo returns `503` when the variable is absent as an early-warning signal, but this behaviour must be explicitly implemented in your own application. Always verify telemetry is flowing after deployment by checking **Application Insights → Live Metrics** or querying `requests` in Log Analytics within a few minutes of startup.
 
 ---
 
