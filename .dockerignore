@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 *.pyo
 .env
+.git/
+.vscode/
 terraform/
-CLAUDE.md
-context.md
+docs/
+*.md
+

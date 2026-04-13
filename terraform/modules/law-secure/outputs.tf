@@ -35,12 +35,13 @@ output "private_endpoint_id" {
 }
 
 output "private_endpoint_ip" {
-  description = "Private IP address of the AMPLS private endpoint."
-  value = local.create_private_link ? (
-    length(azurerm_private_endpoint.ampls[0].private_service_connection) > 0
+  description = "Private IP address of the AMPLS private endpoint. Null when not yet provisioned or security_mode is 'open'."
+  value = try(
+    local.create_private_link
     ? azurerm_private_endpoint.ampls[0].private_service_connection[0].private_ip_address
-    : null
-  ) : null
+    : null,
+    null
+  )
 }
 
 output "dns_zone_ids" {

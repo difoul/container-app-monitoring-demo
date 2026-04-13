@@ -181,11 +181,7 @@ from azure.monitor.opentelemetry import configure_azure_monitor
 configure_azure_monitor()  # reads APPLICATIONINSIGHTS_CONNECTION_STRING from env
 ```
 
-```javascript
-// Node.js (@azure/monitor-opentelemetry)
-const { useAzureMonitor } = require("@azure/monitor-opentelemetry");
-useAzureMonitor(); // reads APPLICATIONINSIGHTS_CONNECTION_STRING from env
-```
+> For other runtimes (Node.js, Java, .NET), see the [Azure Monitor OpenTelemetry distro docs](https://learn.microsoft.com/azure/azure-monitor/app/opentelemetry-enable) — the `APPLICATIONINSIGHTS_CONNECTION_STRING` environment variable and silent-disable behaviour apply to all of them.
 
 > **Note:** Without this configuration, `requests/failed`, `availabilityResults/availabilityPercentage`, and all App Insights-based alerts will have no data.
 
@@ -277,14 +273,14 @@ ContainerAppSystemLogs_CL
 
 ## 2. Dashboard
 
-The Azure Monitor Workbook provides a single-pane view of all key infrastructure and application metrics without writing any queries. Open it at **Azure Monitor → Workbooks → "\<prefix\> Monitoring"**.
+The Azure Monitor Workbook provides a single-pane view of all key infrastructure and application metrics without writing any queries. Open it at **Azure Monitor → Workbooks → "\<container_app_name\> — Monitoring"** (e.g. `monitoring-demo — Monitoring`).
 
 ---
 
 ### How to open the dashboard
 
 1. Go to **Azure Portal → Monitor → Workbooks**
-2. Select the workbook named **"\<prefix\> Monitoring"**
+2. Select the workbook named **"\<container_app_name\> — Monitoring"** (e.g. `monitoring-demo — Monitoring`)
 3. Use the parameter bar at the top to select your **Subscription**, **Container App**, **Application Insights** resource, and **Time Range**
 4. All charts update automatically based on your selections
 
@@ -310,7 +306,7 @@ resource "azurerm_application_insights_workbook" "main" {
   name                = "<valid-uuid>"
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
-  display_name        = "<prefix> Monitoring"
+  display_name        = "${var.container_app_name} — Monitoring"
   source_id           = "azure monitor"
 
   data_json = jsonencode({

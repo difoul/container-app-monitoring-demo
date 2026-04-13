@@ -32,6 +32,17 @@ variable "container_image" {
   }
 }
 
+variable "http_scale_threshold" {
+  description = "Number of concurrent HTTP requests per replica that triggers a scale-out event. Lower values scale out earlier and reduce latency under load; higher values pack more traffic per replica and reduce cost."
+  type        = number
+  default     = 10
+
+  validation {
+    condition     = var.http_scale_threshold >= 1 && var.http_scale_threshold <= 1000
+    error_message = "http_scale_threshold must be between 1 and 1000."
+  }
+}
+
 variable "alert_email" {
   description = "Email address to receive alert notifications"
   type        = string

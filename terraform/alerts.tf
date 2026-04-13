@@ -8,6 +8,13 @@ resource "azurerm_monitor_action_group" "email" {
     name          = "alert-email"
     email_address = var.alert_email
   }
+
+  # Uncomment to add SMS alerting. Requires var.alert_phone_country_code and var.alert_phone_number.
+  # sms_receiver {
+  #   name         = "alert-sms"
+  #   country_code = var.alert_phone_country_code  # e.g. "44" for UK, "1" for US
+  #   phone_number = var.alert_phone_number         # digits only, no spaces or dashes
+  # }
 }
 
 # CPU > 80% of 0.5 vCPU allocation (400,000,000 nanocores), using Maximum aggregation

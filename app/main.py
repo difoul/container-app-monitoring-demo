@@ -1,7 +1,11 @@
+import logging
 import os
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from app.routers import load, errors, latency, scaling, dr
+
+logger = logging.getLogger(__name__)
 
 _connection_string = os.getenv("APPLICATIONINSIGHTS_CONNECTION_STRING")
 
@@ -9,10 +13,26 @@ if _connection_string:
     from azure.monitor.opentelemetry import configure_azure_monitor
     configure_azure_monitor(connection_string=_connection_string)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("startup: application initialised")
+    yield
+    # Flush any buffered telemetry before the process exits so the last traces
+    # are not lost when Azure Container Apps sends SIGTERM on scale-in or deploy.
+    if _connection_string:
+        from opentelemetry import trace
+        provider = trace.get_tracer_provider()
+        if hasattr(provider, "force_flush"):
+            provider.force_flush(timeout_millis=5000)
+    logger.info("shutdown: telemetry flushed")
+
+
 app = FastAPI(
     title="Azure Container App Monitoring Demo",
     description="Endpoints for generating load, errors, latency, and scaling events to test Azure monitoring.",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.include_router(load.router)

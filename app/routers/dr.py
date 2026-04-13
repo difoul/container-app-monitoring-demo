@@ -5,6 +5,12 @@ from fastapi.responses import JSONResponse
 
 router = APIRouter(prefix="/dr", tags=["disaster-recovery"])
 
+# _degraded is process-local state. Each replica has its own copy — setting it on one
+# replica does NOT affect other replicas. For a clean DR simulation, either:
+#   (a) set min_replicas=1 before calling /dr/degrade, or
+#   (b) call /dr/degrade on every replica using the replica's direct internal address.
+# Azure Front Door only removes a region from rotation when ALL replicas fail the health
+# probe, so a partial degrade will NOT trigger failover.
 _degraded: bool = False
 _start_time: float = time.time()
 

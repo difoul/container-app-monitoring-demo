@@ -24,7 +24,26 @@ async def burst(
         tasks = [fetch(client) for _ in range(requests)]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    success = sum(1 for r in results if isinstance(r, httpx.Response) and r.status_code == 200)
-    failed = len(results) - success
+    success = 0
+    timed_out = 0
+    connection_errors = 0
+    other_errors = 0
+    for r in results:
+        if isinstance(r, httpx.Response) and r.status_code == 200:
+            success += 1
+        elif isinstance(r, httpx.TimeoutException):
+            timed_out += 1
+        elif isinstance(r, httpx.ConnectError):
+            connection_errors += 1
+        elif isinstance(r, Exception):
+            other_errors += 1
 
-    return {"fired": requests, "success": success, "failed": failed}
+    return {
+        "fired": requests,
+        "success": success,
+        "failed": {
+            "timeout": timed_out,
+            "connection_error": connection_errors,
+            "other": other_errors,
+        },
+    }

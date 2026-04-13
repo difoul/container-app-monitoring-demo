@@ -6,7 +6,7 @@ resource "azurerm_application_insights_workbook" "main" {
   name                = random_uuid.workbook.result
   resource_group_name = azurerm_resource_group.main.name
   location            = azurerm_resource_group.main.location
-  display_name        = "Container App Monitoring"
+  display_name        = "${var.container_app_name} — Monitoring"
   source_id           = "azure monitor"
   tags                = local.common_tags
 

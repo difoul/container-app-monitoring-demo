@@ -80,7 +80,7 @@ resource "azurerm_container_app" "main" {
 
     http_scale_rule {
       name                = "http-scaling"
-      concurrent_requests = "10"
+      concurrent_requests = tostring(var.http_scale_threshold)
     }
   }
 
